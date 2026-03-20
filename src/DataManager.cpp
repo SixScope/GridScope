@@ -22,11 +22,22 @@ void DataManager::begin() {
 }
 
 bool DataManager::loadConfig() {
+    logMsg("Loading config from /values.json...");
     File file = LittleFS.open("/values.json", "r");
-    if(!file) return false;
+    if(!file) {
+        logMsg("Failed to open /values.json!");
+        return false;
+    }
+    logMsg("File size: %d bytes", file.size());
     JsonDocument doc;
-    if (deserializeJson(doc, file)) return false;
+    DeserializationError error = deserializeJson(doc, file);
+    if (error) {
+        logMsg("deserializeJson() failed: %s", error.c_str());
+        file.close();
+        return false;
+    }
     JsonArray arr = doc.as<JsonArray>();
+    logMsg("Parsed JSON array with %d entries", arr.size());
     numConfigs = 0;
     for (JsonObject obj : arr) {
         if (numConfigs >= 20) break;
@@ -35,7 +46,18 @@ bool DataManager::loadConfig() {
         configs[numConfigs].id.replace(" ", "_");
         configs[numConfigs].name = obj["name"].as<String>();
         configs[numConfigs].unit = obj["unit"].as<String>();
-        configs[numConfigs].fuelType = obj["fuelType"].as<String>();
+        JsonArray fuelTypes = obj["fuelType"];
+        if (fuelTypes.isNull()) {
+            configs[numConfigs].fuelTypes[0] = obj["fuelType"].as<String>();
+            configs[numConfigs].numFuelTypes = 1;
+        } else {
+            configs[numConfigs].numFuelTypes = 0;
+            for(JsonVariant ft : fuelTypes) {
+                if (configs[numConfigs].numFuelTypes < 5) {
+                    configs[numConfigs].fuelTypes[configs[numConfigs].numFuelTypes++] = ft.as<String>();
+                }
+            }
+        }
         JsonArray ranges = obj["ranges"];
         configs[numConfigs].numRanges = ranges.size();
         for(int i=0; i<ranges.size() && i<3; i++) {
@@ -84,6 +106,13 @@ bool DataManager::updateData() {
     if (WiFi.status() != WL_CONNECTED) return false;
     
     demandAdjust = 0;
+    for(int i=0; i<numConfigs; i++) {
+        bool isSpecial = false;
+        for(int j=0; j<configs[i].numFuelTypes; j++) {
+            if (configs[i].fuelTypes[j] == "FREQ") { isSpecial = true; break; }
+        }
+        if (!isSpecial) configs[i].currentValue = 0;
+    }
     
     // 1. Generation - This populates the main generation data AND adds to demandAdjust
     bool sGen = fetchElexonGeneration();
@@ -92,6 +121,15 @@ bool DataManager::updateData() {
     bool sSolar = fetchSheffieldSolar();
     demandAdjust += currentSolar;
     
+    for(int i=0; i<numConfigs; i++) {
+        for(int j=0; j<configs[i].numFuelTypes; j++) {
+            if (configs[i].fuelTypes[j] == "SOLAR") {
+                configs[i].currentValue += currentSolar;
+                break;
+            }
+        }
+    }
+
     // 3. Demand - Fetch the base ITSDO value
     float apiDemand = 0;
     bool sDemand = fetchElexonDemand(apiDemand);
@@ -101,7 +139,12 @@ bool DataManager::updateData() {
     logMsg("Demand: Base=%.1f, Adj=%.1f, Total=%.1f GW", apiDemand, demandAdjust, demandValue);
     
     for(int i=0; i<numConfigs; i++) {
-        if(configs[i].fuelType == "DEMAND") configs[i].currentValue = demandValue;
+        for(int j=0; j<configs[i].numFuelTypes; j++) {
+            if (configs[i].fuelTypes[j] == "DEMAND") {
+                configs[i].currentValue = demandValue;
+                break;
+            }
+        }
     }
 
     // 5. Frequency
@@ -110,7 +153,14 @@ bool DataManager::updateData() {
     // 6. Update Percentages for all generation gauges relative to the final demand
     if (demandValue > 0) {
         for(int i=0; i<numConfigs; i++) {
-            if (configs[i].fuelType != "DEMAND" && configs[i].fuelType != "FREQ") {
+            bool isSpecial = false;
+            for(int j=0; j<configs[i].numFuelTypes; j++) {
+                if (configs[i].fuelTypes[j] == "DEMAND" || configs[i].fuelTypes[j] == "FREQ") {
+                    isSpecial = true;
+                    break;
+                }
+            }
+            if (!isSpecial) {
                 configs[i].currentPct = (configs[i].currentValue / demandValue) * 100.0;
             }
         }
@@ -142,7 +192,7 @@ bool DataManager::fetchElexonFrequency() {
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     time_t now = time(nullptr);
     String to = getISO8601(now);
-    String from = getISO8601(now - 120);
+    String from = getISO8601(now - 60); // Look back 1 minute
     String url = "https://data.elexon.co.uk/bmrs/api/v1/system/frequency/stream?from=" + from + "&to=" + to;
     
     http.begin(client, url);
@@ -154,11 +204,26 @@ bool DataManager::fetchElexonFrequency() {
         if (!deserializeJson(doc, payload)) {
             JsonArray arr = doc.as<JsonArray>();
             if (arr.size() > 0) {
-                float val = arr[arr.size() - 1]["frequency"].as<float>();
-                for(int i=0; i<numConfigs; i++) {
-                    if(configs[i].fuelType == "FREQ") configs[i].currentValue = val;
+                float val = 0;
+                for(int i = arr.size() - 1; i >= 0; i--) {
+                    float f = arr[i]["frequency"].as<float>();
+                    if (f > 0) {
+                        val = f;
+                        break;
+                    }
                 }
-                return true;
+
+                if (val > 0) {
+                    for(int i=0; i<numConfigs; i++) {
+                        for(int j=0; j<configs[i].numFuelTypes; j++) {
+                            if(configs[i].fuelTypes[j] == "FREQ") {
+                                configs[i].currentValue = val;
+                                break;
+                            }
+                        }
+                    }
+                    return true;
+                }
             }
         }
     }
@@ -182,12 +247,16 @@ bool DataManager::fetchElexonGeneration() {
                 float val = item["currentUsage"].as<float>() / 1000.0;
                 
                 if (ft) {
-                    // Logic: Add SOLAR and absolute values of Negative generation to demandAdjust
                     if (strcmp(ft, "SOLAR") == 0) demandAdjust += val;
                     if (val < 0) demandAdjust += fabs(val);
 
                     for(int i=0; i<numConfigs; i++) {
-                        if (configs[i].fuelType == ft) configs[i].currentValue = val;
+                        for(int j=0; j<configs[i].numFuelTypes; j++) {
+                            if (configs[i].fuelTypes[j] == ft) {
+                                configs[i].currentValue += val;
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -209,7 +278,12 @@ bool DataManager::fetchSheffieldSolar() {
                 float val = doc["data"][0][2].as<float>() / 1000.0;
                 currentSolar = val;
                 for(int i=0; i<numConfigs; i++) {
-                    if(configs[i].fuelType == "SOLAR") configs[i].currentValue = val;
+                    for(int j=0; j<configs[i].numFuelTypes; j++) {
+                        if(configs[i].fuelTypes[j] == "SOLAR") {
+                            configs[i].currentValue = val;
+                            break;
+                        }
+                    }
                 }
                 return true;
             }

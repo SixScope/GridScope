@@ -15,7 +15,8 @@ struct GaugeConfig {
     String id = "";
     String name = "Empty";
     String unit = "";
-    String fuelType = "";
+    String fuelTypes[5];
+    int numFuelTypes = 0;
     RangeConfig ranges[3];
     int numRanges = 0;
     float currentValue = 0;
@@ -31,6 +32,8 @@ public:
     DataManager();
     void begin();
     bool updateData();
+    bool loadConfig();
+    bool fetchElexonFrequency();
     GaugeConfig getGaugeConfig(int index);
     GaugeConfig getGaugeConfigById(String id);
     int getNumConfigs() { return numConfigs; }
@@ -46,10 +49,8 @@ private:
     float demandAdjust = 0;
     GridData currentData;
     
-    bool loadConfig();
     bool fetchElexonGeneration();
     bool fetchElexonDemand(float &apiDemand);
-    bool fetchElexonFrequency();
     bool fetchSheffieldSolar();
 };
 

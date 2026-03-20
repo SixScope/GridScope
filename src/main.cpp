@@ -9,9 +9,12 @@
 #include "../include/WebConfig.h"
 
 Adafruit_VEML7700 veml = Adafruit_VEML7700();
+WiFiManager wifiManager;
 bool hasVeml = false;
 unsigned long lastDataUpdate = 0;
+unsigned long lastFreqUpdate = 0;
 const unsigned long UPDATE_INTERVAL = 300000; 
+const unsigned long FREQ_UPDATE_INTERVAL = 60000;
 
 void drawQRCode(uint8_t screenIdx, const char* text) {
     QRCode qrcode; uint8_t qrcodeData[qrcode_getBufferSize(4)]; 
@@ -45,10 +48,16 @@ void configModeCallback(WiFiManager *myWiFiManager) {
 
 void updateDisplays() {
     Config cfg = webConfig.getConfig();
+    logMsg("Updating displays with theme %d", cfg.theme);
     for(int i = 0; i < 6; i++) {
-        GaugeConfig gcfg = dataMgr.getGaugeConfig((int)cfg.screenData[i]);
-        if (gcfg.id == "") continue;
+        int gaugeIdx = (int)cfg.screenData[i];
+        GaugeConfig gcfg = dataMgr.getGaugeConfig(gaugeIdx);
+        if (gcfg.id == "") {
+            logMsg("Screen %d: No gauge configured (index %d)", i, gaugeIdx);
+            continue;
+        }
 
+        logMsg("Screen %d: Drawing %s, Value=%.2f", i, gcfg.name.c_str(), gcfg.currentValue);
         float val = gcfg.currentValue;
         float pct = gcfg.currentPct;
 
@@ -63,12 +72,12 @@ void updateDisplays() {
 
         displayMgr.drawGauge(i, gcfg.name.c_str(), val, min_gauge, max_gauge, gcfg.unit.c_str(), themeColor, pct, gcfg.numRanges, dranges);
         
-        if (i == 4) displayMgr.drawFooter(i, "GridScope");
+        if (i == 4) displayMgr.tft.setTextColor(TFT_DARKGREY); displayMgr.tft.drawString("gridscope.local", 120, 230);
         if (i == 5) { 
             displayMgr.selectDisplay(5);
             displayMgr.tft.setTextColor(TFT_GREENYELLOW); displayMgr.tft.setTextSize(1); displayMgr.tft.setTextDatum(BC_DATUM);
-            displayMgr.tft.drawString(WiFi.localIP().toString(), 120, 210);
-            displayMgr.tft.setTextColor(TFT_DARKGREY); displayMgr.tft.drawString("gridscope.local", 120, 230);
+            displayMgr.tft.drawString(WiFi.localIP().toString(), 120, 230);
+            
             displayMgr.unselectAll();
         }
     }
@@ -78,15 +87,14 @@ void setup() {
     Serial.begin(115200);
     displayMgr.begin();
     displayMgr.drawLogoAll(); displayMgr.unselectAll();
-    dataMgr.begin();
     ledcSetup(0, 5000, 8); ledcAttachPin(25, 0); ledcWrite(0, 255); 
     Wire.begin(21, 22); if (veml.begin()) hasVeml = true;
     WiFi.persistent(true); WiFi.setAutoReconnect(true); WiFi.mode(WIFI_STA); WiFi.enableIpV6();
-    WiFiManager wifiManager;
     wifiManager.setAPCallback(configModeCallback);
     wifiManager.setConnectTimeout(10);
     wifiManager.setConfigPortalTimeout(0); 
     wifiManager.setCaptivePortalEnable(true); 
+    wifiManager.setConfigPortalBlocking(false); 
     String savedSSID = WiFi.SSID();
     bool connected = false;
     if (savedSSID.length() > 0) {
@@ -102,13 +110,10 @@ void setup() {
         }
     }
     if (!connected) {
-        if(!wifiManager.autoConnect("GridScope_AP")) { delay(1000); ESP.restart(); }
+        wifiManager.autoConnect("GridScope_AP");
     }
     webConfig.begin();
-    logMsg("WiFi Connected! Syncing time...");
-    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-    time_t now = time(nullptr); int retry = 0;
-    while (now < 8 * 3600 * 2 && retry < 10) { delay(500); now = time(nullptr); retry++; }
+    dataMgr.begin(); 
     logMsg("System ready. Fetching data...");
     displayMgr.clearAll();
     dataMgr.updateData();
@@ -116,10 +121,52 @@ void setup() {
 }
 
 void loop() {
-    if (WiFi.status() == WL_CONNECTED) {
+    if (WiFi.status() != WL_CONNECTED) {
+        wifiManager.process();
+    } else {
+        static bool timeSynced = false;
+        static unsigned long lastNtpTry = 0;
+        
+        if (!timeSynced) {
+            time_t now = time(nullptr);
+            if (now > 1000000) { // Time is set (> year 1970)
+                struct tm timeinfo;
+                if (getLocalTime(&timeinfo, 10)) {
+                    if (timeinfo.tm_year > 100) { // year > 2000
+                        timeSynced = true;
+                        logMsg("NTP Time Synced!");
+                        // Force immediate frequency update after sync
+                        if (dataMgr.fetchElexonFrequency()) updateDisplays();
+                        lastFreqUpdate = millis();
+                    }
+                }
+            }
+            
+            if (!timeSynced && (millis() - lastNtpTry > 30000 || lastNtpTry == 0)) {
+                logMsg("Attempting NTP sync...");
+                configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+                setenv("TZ", "GMT0BST,M3.5.0/1,M10.5.0", 1);
+                tzset();
+                lastNtpTry = millis();
+            }
+        }
+
+        // Independent Frequency Update (every 1 minute)
+        if (millis() - lastFreqUpdate > FREQ_UPDATE_INTERVAL || lastFreqUpdate == 0) {
+            if (dataMgr.fetchElexonFrequency()) {
+                updateDisplays();
+            }
+            lastFreqUpdate = millis();
+        }
+
+        // General Data Update (every 5 minutes)
         if (millis() - lastDataUpdate > UPDATE_INTERVAL || lastDataUpdate == 0) {
-            if (dataMgr.updateData()) { updateDisplays(); lastDataUpdate = millis(); }
-            else { updateDisplays(); } 
+            if (dataMgr.updateData()) { 
+                updateDisplays(); 
+                lastDataUpdate = millis(); 
+            } else {
+                updateDisplays();
+            } 
         }
     }
     if (hasVeml) {

@@ -36,6 +36,7 @@ private:
     void loadConfig();
     void saveConfig();
     String buildHtml();
+    String getLogoBase64();
 };
 
 extern WebConfig webConfig;

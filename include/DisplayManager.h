@@ -24,7 +24,7 @@ public:
     void clearAll();
     void drawLogoAll();
     void drawText(uint8_t index, const char* text, int x, int y, int size);
-    void drawGauge(uint8_t index, const char* title, float value, float min_val, float max_val, const char* unit, uint16_t theme_color, float percentage = -1, int numRanges = 0, DisplayRange* ranges = nullptr);
+    void drawGauge(uint8_t index, const char* title, float value, float min_val, float max_val, const char* unit, uint16_t theme_color, float percentage, int numRanges, DisplayRange* ranges, bool failed = false);
     void drawFooter(uint8_t index, const char* text);
     
     TFT_eSPI tft = TFT_eSPI(); 

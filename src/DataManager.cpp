@@ -53,14 +53,14 @@ bool DataManager::loadConfig() {
         } else {
             configs[numConfigs].numFuelTypes = 0;
             for(JsonVariant ft : fuelTypes) {
-                if (configs[numConfigs].numFuelTypes < 5) {
+                if (configs[numConfigs].numFuelTypes < 10) {
                     configs[numConfigs].fuelTypes[configs[numConfigs].numFuelTypes++] = ft.as<String>();
                 }
             }
         }
         JsonArray ranges = obj["ranges"];
         configs[numConfigs].numRanges = ranges.size();
-        for(int i=0; i<ranges.size() && i<3; i++) {
+        for(int i=0; i<ranges.size() && i<10; i++) {
             configs[numConfigs].ranges[i].min = ranges[i]["min"].as<float>();
             configs[numConfigs].ranges[i].max = ranges[i]["max"].as<float>();
             configs[numConfigs].ranges[i].redzone = ranges[i]["redzone"].as<int>();
@@ -105,68 +105,71 @@ String getISO8601(time_t t) {
 bool DataManager::updateData() {
     if (WiFi.status() != WL_CONNECTED) return false;
     
-    demandAdjust = 0;
-    for(int i=0; i<numConfigs; i++) {
-        bool isSpecial = false;
-        for(int j=0; j<configs[i].numFuelTypes; j++) {
-            if (configs[i].fuelTypes[j] == "FREQ") { isSpecial = true; break; }
-        }
-        if (!isSpecial) configs[i].currentValue = 0;
-    }
-    
-    // 1. Generation - This populates the main generation data AND adds to demandAdjust
-    bool sGen = fetchElexonGeneration();
-    
-    // 2. Solar - This adds Sheffield solar to demandAdjust
-    bool sSolar = fetchSheffieldSolar();
-    demandAdjust += currentSolar;
-    
-    for(int i=0; i<numConfigs; i++) {
-        for(int j=0; j<configs[i].numFuelTypes; j++) {
-            if (configs[i].fuelTypes[j] == "SOLAR") {
-                configs[i].currentValue += currentSolar;
-                break;
-            }
-        }
+    float nextValues[20];
+    bool genUpdateSuccess[20];
+    for(int i=0; i<20; i++) {
+        nextValues[i] = 0;
+        genUpdateSuccess[i] = true;
     }
 
-    // 3. Demand - Fetch the base ITSDO value
+    float localDemandAdjust = 0;
+    
+    // 1. Generation
+    bool sGen = fetchElexonGeneration(nextValues, localDemandAdjust);
+    
+    // 2. Solar
+    float localSolar = 0;
+    bool sSolar = fetchSheffieldSolar(nextValues, localSolar);
+    localDemandAdjust += localSolar;
+
+    // 3. Demand
     float apiDemand = 0;
     bool sDemand = fetchElexonDemand(apiDemand);
     
     // 4. Calculate Final Demand
-    demandValue = apiDemand + demandAdjust;
-    logMsg("Demand: Base=%.1f, Adj=%.1f, Total=%.1f GW", apiDemand, demandAdjust, demandValue);
+    float localDemandValue = apiDemand + localDemandAdjust;
+    logMsg("Demand: Base=%.1f, Adj=%.1f, Total=%.1f GW", apiDemand, localDemandAdjust, localDemandValue);
     
     for(int i=0; i<numConfigs; i++) {
+        bool usesDemand = false;
+        bool usesFreq = false;
+        bool usesGen = false;
+        bool usesSolar = false;
+
         for(int j=0; j<configs[i].numFuelTypes; j++) {
-            if (configs[i].fuelTypes[j] == "DEMAND") {
-                configs[i].currentValue = demandValue;
-                break;
+            if (configs[i].fuelTypes[j] == "DEMAND") usesDemand = true;
+            else if (configs[i].fuelTypes[j] == "FREQ") usesFreq = true;
+            else if (configs[i].fuelTypes[j] == "SOLAR") usesSolar = true;
+            else usesGen = true;
+        }
+
+        bool success = true;
+        if (usesFreq) {
+            // Frequency is updated independently but we check it here too
+            // Actually FREQ fetch function updates configs directly currently.
+            // Let's keep FREQ as is for now or refactor it too.
+        }
+        if (usesGen && !sGen) success = false;
+        if (usesSolar && !sSolar) success = false;
+        if (usesDemand && (!sDemand || !sGen || !sSolar)) success = false;
+
+        configs[i].lastUpdateSuccess = success;
+
+        if (success) {
+            if (usesDemand) configs[i].currentValue = localDemandValue;
+            else if (!usesFreq) configs[i].currentValue = nextValues[i];
+            
+            // Update percentage
+            if (localDemandValue > 0 && !usesDemand && !usesFreq) {
+                configs[i].currentPct = (configs[i].currentValue / localDemandValue) * 100.0;
             }
         }
     }
 
     // 5. Frequency
     bool sFreq = fetchElexonFrequency();
-    
-    // 6. Update Percentages for all generation gauges relative to the final demand
-    if (demandValue > 0) {
-        for(int i=0; i<numConfigs; i++) {
-            bool isSpecial = false;
-            for(int j=0; j<configs[i].numFuelTypes; j++) {
-                if (configs[i].fuelTypes[j] == "DEMAND" || configs[i].fuelTypes[j] == "FREQ") {
-                    isSpecial = true;
-                    break;
-                }
-            }
-            if (!isSpecial) {
-                configs[i].currentPct = (configs[i].currentValue / demandValue) * 100.0;
-            }
-        }
-    }
-    
-    return sGen || sDemand || sFreq;
+
+    return sGen || sDemand || sSolar || sFreq;
 }
 
 bool DataManager::fetchElexonDemand(float &apiDemand) {
@@ -181,6 +184,7 @@ bool DataManager::fetchElexonDemand(float &apiDemand) {
         JsonDocument doc;
         if (!deserializeJson(doc, payload)) {
             apiDemand = doc["data"][0]["demand"].as<float>() / 1000.0;
+            http.end();
             return true;
         }
     }
@@ -192,20 +196,27 @@ bool DataManager::fetchElexonFrequency() {
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     time_t now = time(nullptr);
     String to = getISO8601(now);
-    String from = getISO8601(now - 60); // Look back 1 minute
+    String from = getISO8601(now - 300); // 5 minute window
     String url = "https://data.elexon.co.uk/bmrs/api/v1/system/frequency/stream?from=" + from + "&to=" + to;
     
     http.begin(client, url);
     http.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+    http.setTimeout(5000); // 5 second timeout for SSL/Network
     int code = http.GET();
+    bool success = false;
+
     if(code == HTTP_CODE_OK) {
         String payload = http.getString();
         JsonDocument doc;
-        if (!deserializeJson(doc, payload)) {
+        DeserializationError error = deserializeJson(doc, payload);
+        if (error) {
+            logMsg("Freq JSON error: %s", error.c_str());
+        } else {
             JsonArray arr = doc.as<JsonArray>();
-            if (arr.size() > 0) {
+            int dataPoints = arr.size();
+            if (dataPoints > 0) {
                 float val = 0;
-                for(int i = arr.size() - 1; i >= 0; i--) {
+                for(int i = dataPoints - 1; i >= 0; i--) {
                     float f = arr[i]["frequency"].as<float>();
                     if (f > 0) {
                         val = f;
@@ -218,19 +229,41 @@ bool DataManager::fetchElexonFrequency() {
                         for(int j=0; j<configs[i].numFuelTypes; j++) {
                             if(configs[i].fuelTypes[j] == "FREQ") {
                                 configs[i].currentValue = val;
+                                configs[i].lastUpdateSuccess = true;
                                 break;
                             }
                         }
                     }
-                    return true;
+                    logMsg("Grid Frequency updated: %.3f Hz (from %d pts)", val, dataPoints);
+                    success = true;
+                } else {
+                    logMsg("Freq error: %d pts but no valid frequency found", dataPoints);
+                }
+            } else {
+                logMsg("Freq error: API returned empty array (Window: 5m)");
+            }
+        }
+    } else {
+        logMsg("Freq error: API returned HTTP code %d", code);
+    }
+    
+    http.end();
+
+    if (!success) {
+        // Explicitly mark FREQ gauges as failed if we didn't get a value
+        for(int i=0; i<numConfigs; i++) {
+            for(int j=0; j<configs[i].numFuelTypes; j++) {
+                if(configs[i].fuelTypes[j] == "FREQ") {
+                    configs[i].lastUpdateSuccess = false;
+                    break;
                 }
             }
         }
     }
-    http.end(); return false;
+    return success;
 }
 
-bool DataManager::fetchElexonGeneration() {
+bool DataManager::fetchElexonGeneration(float* nextValues, float& localDemandAdjust) {
     WiFiClientSecure client; client.setInsecure(); HTTPClient http;
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     http.begin(client, "https://data.elexon.co.uk/bmrs/api/v1/generation/outturn/current?format=json");
@@ -247,26 +280,27 @@ bool DataManager::fetchElexonGeneration() {
                 float val = item["currentUsage"].as<float>() / 1000.0;
                 
                 if (ft) {
-                    if (strcmp(ft, "SOLAR") == 0) demandAdjust += val;
-                    if (val < 0) demandAdjust += fabs(val);
+                    if (strcmp(ft, "SOLAR") == 0) localDemandAdjust += val;
+                    if (val < 0) localDemandAdjust += fabs(val);
 
                     for(int i=0; i<numConfigs; i++) {
                         for(int j=0; j<configs[i].numFuelTypes; j++) {
                             if (configs[i].fuelTypes[j] == ft) {
-                                configs[i].currentValue += val;
+                                nextValues[i] += val;
                                 break;
                             }
                         }
                     }
                 }
             }
+            http.end();
             return true;
         }
     }
     http.end(); return false;
 }
 
-bool DataManager::fetchSheffieldSolar() {
+bool DataManager::fetchSheffieldSolar(float* nextValues, float& localSolar) {
     WiFiClientSecure client; client.setInsecure(); HTTPClient http;
     http.begin(client, "https://api.pvlive.uk/pvlive/api/v4/pes/0");
     http.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
@@ -276,15 +310,16 @@ bool DataManager::fetchSheffieldSolar() {
         if (!deserializeJson(doc, payload)) {
             if (doc["data"].size() > 0) {
                 float val = doc["data"][0][2].as<float>() / 1000.0;
-                currentSolar = val;
+                localSolar = val;
                 for(int i=0; i<numConfigs; i++) {
                     for(int j=0; j<configs[i].numFuelTypes; j++) {
                         if(configs[i].fuelTypes[j] == "SOLAR") {
-                            configs[i].currentValue = val;
+                            nextValues[i] += val;
                             break;
                         }
                     }
                 }
+                http.end();
                 return true;
             }
         }

@@ -70,7 +70,7 @@ void updateDisplays() {
             dranges[r].min = gcfg.ranges[r].min; dranges[r].max = gcfg.ranges[r].max; dranges[r].redzone = gcfg.ranges[r].redzone;
         }
 
-        displayMgr.drawGauge(i, gcfg.name.c_str(), val, min_gauge, max_gauge, gcfg.unit.c_str(), themeColor, pct, gcfg.numRanges, dranges);
+        displayMgr.drawGauge(i, gcfg.name.c_str(), val, min_gauge, max_gauge, gcfg.unit.c_str(), themeColor, pct, gcfg.numRanges, dranges, !gcfg.lastUpdateSuccess);
         
         if (i == 4) displayMgr.tft.setTextColor(TFT_DARKGREY); displayMgr.tft.drawString("gridscope.local", 120, 230);
         if (i == 5) { 
@@ -86,35 +86,86 @@ void updateDisplays() {
 void setup() {
     Serial.begin(115200);
     displayMgr.begin();
+    
+    // 1. On boot show logos on all screens
     displayMgr.drawLogoAll(); displayMgr.unselectAll();
+    
     ledcSetup(0, 5000, 8); ledcAttachPin(25, 0); ledcWrite(0, 255); 
     Wire.begin(21, 22); if (veml.begin()) hasVeml = true;
     WiFi.persistent(true); WiFi.setAutoReconnect(true); WiFi.mode(WIFI_STA); WiFi.enableIpV6();
+    
     wifiManager.setAPCallback(configModeCallback);
     wifiManager.setConnectTimeout(10);
     wifiManager.setConfigPortalTimeout(0); 
     wifiManager.setCaptivePortalEnable(true); 
-    wifiManager.setConfigPortalBlocking(false); 
+    wifiManager.setConfigPortalBlocking(true); 
+
     String savedSSID = WiFi.SSID();
     bool connected = false;
+
     if (savedSSID.length() > 0) {
-        WiFi.begin(); unsigned long startAttempt = millis();
-        while (millis() - startAttempt < 20000) {
-            int remaining = 20 - (millis() - startAttempt) / 1000;
-            displayMgr.selectDisplay(5); displayMgr.tft.fillScreen(TFT_BLACK); displayMgr.tft.setTextColor(TFT_WHITE);
-            displayMgr.tft.setTextDatum(MC_DATUM); displayMgr.tft.drawString("WiFi Connecting...", 120, 80, 4); 
-            displayMgr.tft.setTextColor(TFT_YELLOW); displayMgr.tft.drawString(savedSSID, 120, 130, 4);
-            displayMgr.tft.setTextColor(TFT_WHITE); displayMgr.tft.drawString(String(remaining) + "s", 120, 180, 4); displayMgr.unselectAll();
+        // 2. If there is a saved WiFi attempt to connect
+        WiFi.begin();
+        
+        // 3. Wait up to 10 seconds. Upon connection proceed to main app.
+        unsigned long startAttempt = millis();
+        while (millis() - startAttempt < 10000) {
             if (WiFi.status() == WL_CONNECTED) { connected = true; break; }
-            delay(500);
+            delay(100);
+        }
+
+        // 4. If after 10 seconds, clear displays
+        if (!connected) {
+            displayMgr.clearAll();
+            
+            // 5. Loop for another 10 seconds showing status and countdown
+            unsigned long startCountdown = millis();
+            while (millis() - startCountdown < 10000) {
+                int remaining = 10 - (millis() - startCountdown) / 1000;
+                
+                // Screen 1: "Waiting for WiFi:", "[AP name]"
+                displayMgr.selectDisplay(0);
+                displayMgr.tft.fillScreen(TFT_BLACK);
+                displayMgr.tft.setTextColor(TFT_WHITE);
+                displayMgr.tft.setTextDatum(MC_DATUM);
+                displayMgr.tft.drawString("Waiting for WiFi:", 120, 80, 4);
+                displayMgr.tft.setTextColor(TFT_YELLOW);
+                displayMgr.tft.drawString(savedSSID, 120, 140, 4);
+                
+                // Screen 2: Countdown timer
+                displayMgr.selectDisplay(1);
+                displayMgr.tft.fillScreen(TFT_BLACK);
+                displayMgr.tft.setTextColor(TFT_WHITE);
+                displayMgr.tft.setTextDatum(MC_DATUM);
+                displayMgr.tft.drawString("Setup in:", 120, 80, 4);
+                displayMgr.tft.setTextColor(TFT_GREENYELLOW);
+                displayMgr.tft.drawString(String(remaining) + "s", 120, 140, 4);
+                
+                displayMgr.unselectAll();
+
+                if (WiFi.status() == WL_CONNECTED) { connected = true; break; }
+                delay(500);
+            }
         }
     }
+
+    // 6. If countdown reaches 0 (or no saved WiFi), go to WiFi provisioning
     if (!connected) {
-        wifiManager.autoConnect("GridScope_AP");
+        if(!wifiManager.autoConnect("GridScope_AP")) { delay(1000); ESP.restart(); }
     }
+
+    // Main App Initialization
     webConfig.begin();
     dataMgr.begin(); 
+    
+    // 7. Try to get ntp time (will be handled in loop, but we trigger it here)
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+    setenv("TZ", "GMT0BST,M3.5.0/1,M10.5.0", 1);
+    tzset();
+    
     logMsg("System ready. Fetching data...");
+    
+    // 8. Clear all screens and refresh gauges
     displayMgr.clearAll();
     dataMgr.updateData();
     updateDisplays();
@@ -122,7 +173,7 @@ void setup() {
 
 void loop() {
     if (WiFi.status() != WL_CONNECTED) {
-        wifiManager.process();
+        // No longer processing WiFiManager in loop
     } else {
         static bool timeSynced = false;
         static unsigned long lastNtpTry = 0;

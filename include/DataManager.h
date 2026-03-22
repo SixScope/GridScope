@@ -15,12 +15,13 @@ struct GaugeConfig {
     String id = "";
     String name = "Empty";
     String unit = "";
-    String fuelTypes[5];
+    String fuelTypes[10];
     int numFuelTypes = 0;
-    RangeConfig ranges[3];
+    RangeConfig ranges[10];
     int numRanges = 0;
     float currentValue = 0;
     float currentPct = -1;
+    bool lastUpdateSuccess = true;
 };
 
 struct GridData {
@@ -49,9 +50,9 @@ private:
     float demandAdjust = 0;
     GridData currentData;
     
-    bool fetchElexonGeneration();
+    bool fetchElexonGeneration(float* nextValues, float& localDemandAdjust);
     bool fetchElexonDemand(float &apiDemand);
-    bool fetchSheffieldSolar();
+    bool fetchSheffieldSolar(float* nextValues, float& localSolar);
 };
 
 extern DataManager dataMgr;

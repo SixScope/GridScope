@@ -99,7 +99,7 @@ static void drawArcSlice(TFT_eSprite* sprite, int px, int py, int radius, int ar
     }
 }
 
-void DisplayManager::drawGauge(uint8_t index, const char* title, float value, float min_val, float max_val, const char* unit, uint16_t theme_color, float percentage, int numRanges, DisplayRange* ranges) {
+void DisplayManager::drawGauge(uint8_t index, const char* title, float value, float min_val, float max_val, const char* unit, uint16_t theme_color, float percentage, int numRanges, DisplayRange* ranges, bool failed) {
     sprite->fillSprite(TFT_BLACK);
 
     const int   px       = 120;
@@ -116,10 +116,12 @@ void DisplayManager::drawGauge(uint8_t index, const char* title, float value, fl
     if (totalRange <= 0) totalRange = 1.0f;
 
     auto toClockAngle = [](float logicalAngle) -> int {
-        float a = fmod(logicalAngle, 360.0f);
+        // Shift by -180 to match the (rad = (logAngle - 180) * PI/180) used by ticks/needle
+        float a = fmod(logicalAngle - 180.0f, 360.0f);
         if (a < 0) a += 360.0f;
         return (int)a;
     };
+
 
     // -------------------------------------------------------------------------
     // 1. BACKGROUND TRACK & COLOUR ZONES
@@ -142,6 +144,13 @@ void DisplayManager::drawGauge(uint8_t index, const char* title, float value, fl
             for (float a = zoneAngleStart; a < zoneAngleEnd; a += 6.0f) {
                 float sliceEnd = min(a + 6.5f, zoneAngleEnd);
                 float p = (a - zoneAngleStart) / (zoneAngleEnd - zoneAngleStart);
+                
+                // If the zone is on the left half (before 12 o'clock / 360°), 
+                // invert p so the gradient runs towards Yellow at the center.
+                if (zoneAngleEnd <= 360.1f) {
+                    p = 1.0f - p;
+                }
+
                 float rampP = (ranges[i].redzone == 1) ? (p * 0.5f) : (0.5f + p * 0.5f);
                 uint16_t col = getWarningColor(rampP);
 
@@ -172,7 +181,8 @@ void DisplayManager::drawGauge(uint8_t index, const char* title, float value, fl
             int lx = px + (int)(cos(rad) * (radius - 45));
             int ly = py + (int)(sin(rad) * (radius - 45));
             sprite->setTextColor(TFT_WHITE);
-            sprite->drawString(String((int)tickVal), lx, ly, 1);
+            String tickStr = (totalRange < 10) ? String(tickVal, 1) : String((int)tickVal);
+            sprite->drawString(tickStr, lx, ly, 1);
         }
     }
 
@@ -201,7 +211,7 @@ void DisplayManager::drawGauge(uint8_t index, const char* title, float value, fl
         sprite->drawString(String(percentage, 1) + "%", 120, 145, 4);
     }
 
-    sprite->setTextColor(TFT_WHITE);
+    sprite->setTextColor(failed ? TFT_RED : TFT_WHITE);
     sprite->drawString(title, 120, 185, 4);
 
     selectDisplay(index);

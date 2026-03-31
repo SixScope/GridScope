@@ -1,8 +1,8 @@
-#include "../include/DataManager.h"
+#include "DataManager.h"
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <time.h>
-#include "../include/WebConfig.h"
+#include "WebConfig.h"
 
 DataManager dataMgr;
 
@@ -67,6 +67,7 @@ bool DataManager::loadConfig() {
         }
         configs[numConfigs].currentValue = 0;
         configs[numConfigs].currentPct = -1;
+        configs[numConfigs].lastUpdateSuccess = true;
         numConfigs++;
     }
     file.close();
@@ -114,21 +115,23 @@ bool DataManager::updateData() {
 
     float localDemandAdjust = 0;
     
-    // 1. Generation
     bool sGen = fetchElexonGeneration(nextValues, localDemandAdjust);
+    if (!sGen) logMsg("Error: Elexon Generation API failed");
     
     // 2. Solar
     float localSolar = 0;
     bool sSolar = fetchSheffieldSolar(nextValues, localSolar);
+    if (!sSolar) logMsg("Error: Sheffield Solar API failed");
     localDemandAdjust += localSolar;
 
     // 3. Demand
     float apiDemand = 0;
     bool sDemand = fetchElexonDemand(apiDemand);
+    if (!sDemand) logMsg("Error: Elexon Demand API failed");
     
     // 4. Calculate Final Demand
     float localDemandValue = apiDemand + localDemandAdjust;
-    logMsg("Demand: Base=%.1f, Adj=%.1f, Total=%.1f GW", apiDemand, localDemandAdjust, localDemandValue);
+    logMsg("Demand: Base=%.1f, Adj=%.1f, Total=%.1f GW | sGen:%d sSolar:%d sDemand:%d", apiDemand, localDemandAdjust, localDemandValue, sGen, sSolar, sDemand);
     
     for(int i=0; i<numConfigs; i++) {
         bool usesDemand = false;
@@ -144,15 +147,13 @@ bool DataManager::updateData() {
         }
 
         bool success = true;
-        if (usesFreq) {
-            // Frequency is updated independently but we check it here too
-            // Actually FREQ fetch function updates configs directly currently.
-            // Let's keep FREQ as is for now or refactor it too.
-        }
         if (usesGen && !sGen) success = false;
         if (usesSolar && !sSolar) success = false;
         if (usesDemand && (!sDemand || !sGen || !sSolar)) success = false;
 
+        if (configs[i].lastUpdateSuccess != success) {
+            logMsg("Gauge '%s' status changed to: %s", configs[i].name.c_str(), success ? "OK" : "FAILED");
+        }
         configs[i].lastUpdateSuccess = success;
 
         if (success) {

@@ -1,8 +1,16 @@
-#include "../include/DisplayManager.h"
+#include "DisplayManager.h"
+#include <TJpg_Decoder.h>
 
 DisplayManager displayMgr;
 
 #define SHARED_RST 26
+
+// Callback function for TJpg_Decoder to render blocks to the TFT
+bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
+    if (y >= displayMgr.tft.height()) return false;
+    displayMgr.tft.pushImage(x, y, w, h, bitmap);
+    return true;
+}
 
 DisplayManager::DisplayManager() {
     sprite = nullptr;
@@ -33,6 +41,10 @@ void DisplayManager::begin() {
     sprite = new TFT_eSprite(&tft);
     sprite->setColorDepth(8);
     sprite->createSprite(240, 240);
+
+    // Initialize TJpg_Decoder
+    TJpgDec.setCallback(tft_output);
+    TJpgDec.setJpgScale(1);
 }
 
 void DisplayManager::selectDisplay(uint8_t index) {
@@ -52,10 +64,24 @@ void DisplayManager::clearAll() {
     unselectAll();
 }
 
-void DisplayManager::drawLogoAll() {
+void DisplayManager::drawLogoToDisplay(uint8_t index, const char* filename) {
+    if (!LittleFS.exists(filename)) return;
+    
+    selectDisplay(index);
+    TJpgDec.drawFsJpg(0, 0, filename, LittleFS);
+    unselectAll();
+}
+
+void DisplayManager::drawLogoFromFile(const char* filename) {
+    if (!LittleFS.exists(filename)) {
+        Serial.printf("Logo file %s not found in LittleFS!\n", filename);
+        return;
+    }
+    Serial.printf("Drawing logo %s to all screens...\n", filename);
+
     for(int i = 0; i < NUM_DISPLAYS; i++) {
         selectDisplay(i);
-        tft.pushImage(0, 0, 240, 240, logo_img);
+        TJpgDec.drawFsJpg(0, 0, filename, LittleFS);
     }
     unselectAll();
 }
@@ -205,11 +231,6 @@ void DisplayManager::drawGauge(uint8_t index, const char* title, float value, fl
     sprite->setTextColor(TFT_WHITE);
     String valStr = String(value, (value >= 100.0f) ? 1 : 2) + " " + String(unit);
     sprite->drawString(valStr, 120, 70, 4);
-
-    if (percentage >= 0) {
-        sprite->setTextColor(TFT_CYAN);
-        sprite->drawString(String(percentage, 1) + "%", 120, 145, 4);
-    }
 
     sprite->setTextColor(failed ? TFT_RED : TFT_WHITE);
     sprite->drawString(title, 120, 185, 4);

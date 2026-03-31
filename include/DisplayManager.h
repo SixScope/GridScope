@@ -2,7 +2,7 @@
 #define DISPLAY_MANAGER_H
 
 #include <TFT_eSPI.h>
-#include "logo.h"
+#include <LittleFS.h>
 
 #define NUM_DISPLAYS 6
 
@@ -22,7 +22,8 @@ public:
     void selectDisplay(uint8_t index);
     void unselectAll();
     void clearAll();
-    void drawLogoAll();
+    void drawLogoFromFile(const char* filename);
+    void drawLogoToDisplay(uint8_t index, const char* filename);
     void drawText(uint8_t index, const char* text, int x, int y, int size);
     void drawGauge(uint8_t index, const char* title, float value, float min_val, float max_val, const char* unit, uint16_t theme_color, float percentage, int numRanges, DisplayRange* ranges, bool failed = false);
     void drawFooter(uint8_t index, const char* text);

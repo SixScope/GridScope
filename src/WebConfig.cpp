@@ -1,5 +1,5 @@
-#include "../include/WebConfig.h"
-#include "../include/DataManager.h"
+#include "WebConfig.h"
+#include "DataManager.h"
 #include <stdarg.h>
 
 WebConfig webConfig;
@@ -29,7 +29,7 @@ void logMsg(const char* format, ...) {
 }
 
 
-extern void updateDisplays();
+extern void updateDisplays(bool force = false);
 
 WebConfig::WebConfig() : server(80), events("/events") {
     for(int i=0; i<6; i++) currentConfig.screenData[i] = (DisplayDataType)i;
@@ -70,7 +70,7 @@ void WebConfig::log(const char* msg) {
 Config WebConfig::getConfig() { return currentConfig; }
 
 void WebConfig::loadConfig() {
-    preferences.begin("gridscope", true);
+    preferences.begin("gridcfg", true);
     for(int i=0; i<6; i++) {
         String k = "s" + String(i+1);
         currentConfig.screenData[i] = (DisplayDataType)preferences.getInt(k.c_str(), i);
@@ -79,7 +79,7 @@ void WebConfig::loadConfig() {
 }
 
 void WebConfig::saveConfig() {
-    preferences.begin("gridscope", false);
+    preferences.begin("gridcfg", false);
     for(int i=0; i<6; i++) {
         String k = "s" + String(i+1);
         preferences.putInt(k.c_str(), (int)currentConfig.screenData[i]);

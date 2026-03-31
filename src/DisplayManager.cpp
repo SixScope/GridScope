@@ -33,6 +33,7 @@ void DisplayManager::begin() {
         selectDisplay(i);
         tft.init();
         tft.setRotation(0);
+        tft.setSwapBytes(true);
         tft.fillScreen(TFT_BLACK);
         unselectAll();
         delay(50);

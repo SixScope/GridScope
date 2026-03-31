@@ -125,13 +125,34 @@ void setup() {
 
     if (savedSSID.length() > 0) {
         // 2. If there is a saved WiFi attempt to connect
+        displayMgr.selectDisplay(0);
+        displayMgr.tft.fillScreen(TFT_BLACK);
+        displayMgr.tft.setTextColor(TFT_WHITE);
+        displayMgr.tft.setTextDatum(MC_DATUM);
+        displayMgr.tft.drawString("Trying to connect:", 120, 80, 4);
+        displayMgr.tft.setTextColor(TFT_YELLOW);
+        displayMgr.tft.drawString(savedSSID, 120, 140, 4);
+        displayMgr.unselectAll();
+
         WiFi.begin();
         
-        // 3. Wait up to 10 seconds. Upon connection proceed to main app.
+        // 3. Wait up to 10 seconds.
         unsigned long startAttempt = millis();
         while (millis() - startAttempt < 10000) {
-            if (WiFi.status() == WL_CONNECTED) { connected = true; break; }
+            if (WiFi.status() == WL_CONNECTED) { 
+                connected = true; 
+                break; 
+            }
             delay(100);
+        }
+
+        if (connected) {
+            displayMgr.selectDisplay(0);
+            displayMgr.tft.fillScreen(TFT_BLACK);
+            displayMgr.tft.setTextColor(TFT_CYAN);
+            displayMgr.tft.setTextDatum(MC_DATUM);
+            displayMgr.tft.drawString("Obtaining IP...", 120, 120, 4);
+            displayMgr.unselectAll();
         }
 
         // 4. If after 10 seconds, clear displays
@@ -178,16 +199,40 @@ void setup() {
     webConfig.begin();
     dataMgr.begin(); // DataManager also calls LittleFS.begin(true)
     
-    // 7. Try to get ntp time (will be handled in loop, but we trigger it here)
+    // 7. Try to get ntp time
+    displayMgr.selectDisplay(0);
+    displayMgr.tft.fillScreen(TFT_BLACK);
+    displayMgr.tft.setTextColor(TFT_GREENYELLOW);
+    displayMgr.tft.setTextDatum(MC_DATUM);
+    displayMgr.tft.drawString("Getting NTP Time...", 120, 120, 4);
+    displayMgr.unselectAll();
+
     configTime(0, 0, "pool.ntp.org", "time.nist.gov");
     setenv("TZ", "GMT0BST,M3.5.0/1,M10.5.0", 1);
     tzset();
+
+    // Wait up to 5s for initial NTP sync
+    unsigned long ntpStart = millis();
+    while (millis() - ntpStart < 5000) {
+        time_t now = time(nullptr);
+        if (now > 1000000) break;
+        delay(100);
+    }
     
     logMsg("System ready. Fetching data...");
     
-    // 8. Clear all screens and refresh gauges
-    displayMgr.clearAll();
+    displayMgr.selectDisplay(0);
+    displayMgr.tft.fillScreen(TFT_BLACK);
+    displayMgr.tft.setTextColor(TFT_YELLOW);
+    displayMgr.tft.setTextDatum(MC_DATUM);
+    displayMgr.tft.drawString("Querying API...", 120, 120, 4);
+    displayMgr.unselectAll();
+
+    // 8. Fetch data before clearing logos/status
     dataMgr.updateData();
+    
+    // 9. Now clear and show gauges
+    displayMgr.clearAll();
     updateDisplays(true);
 }
 

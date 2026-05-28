@@ -3,7 +3,7 @@
 
 DisplayManager displayMgr;
 
-#define SHARED_RST 26
+#define SHARED_RST 9
 
 // Callback function for TJpg_Decoder to render blocks to the TFT
 bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
@@ -14,6 +14,7 @@ bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) 
 
 DisplayManager::DisplayManager() {
     sprite = nullptr;
+    _initialized = false;
 }
 
 void DisplayManager::begin() {
@@ -32,7 +33,7 @@ void DisplayManager::begin() {
     for(int i = 0; i < NUM_DISPLAYS; i++) {
         selectDisplay(i);
         tft.init();
-        tft.setRotation(0);
+        tft.setRotation(displayRotations[i]);
         tft.setSwapBytes(true);
         tft.fillScreen(TFT_BLACK);
         unselectAll();
@@ -46,11 +47,17 @@ void DisplayManager::begin() {
     // Initialize TJpg_Decoder
     TJpgDec.setCallback(tft_output);
     TJpgDec.setJpgScale(1);
+    _initialized = true;
 }
 
 void DisplayManager::selectDisplay(uint8_t index) {
     for(int i = 0; i < NUM_DISPLAYS; i++) digitalWrite(csPins[i], HIGH);
-    if(index < NUM_DISPLAYS) digitalWrite(csPins[index], LOW);
+    if(index < NUM_DISPLAYS) {
+        digitalWrite(csPins[index], LOW);
+        if (_initialized) {
+            tft.setRotation(displayRotations[index]);
+        }
+    }
 }
 
 void DisplayManager::unselectAll() {

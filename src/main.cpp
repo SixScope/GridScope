@@ -3,6 +3,7 @@
 #include <WiFiManager.h>
 #include <Adafruit_VEML7700.h>
 #include <time.h>
+#include <ESPmDNS.h>
 #include "qrcode.h"
 #include "DisplayManager.h"
 #include "DataManager.h"
@@ -11,6 +12,7 @@
 Adafruit_VEML7700 veml = Adafruit_VEML7700();
 WiFiManager wifiManager;
 bool hasVeml = false;
+const int LDR_PIN = 3;
 unsigned long lastDataUpdate = 0;
 unsigned long lastFreqUpdate = 0;
 const unsigned long UPDATE_INTERVAL = 300000; 
@@ -77,17 +79,29 @@ void updateDisplays(bool force = false) {
 
         displayMgr.drawGauge(i, gcfg.name.c_str(), val, min_gauge, max_gauge, gcfg.unit.c_str(), themeColor, pct, gcfg.numRanges, dranges, !gcfg.lastUpdateSuccess);
         
+        if (i == 3) {
+            displayMgr.selectDisplay(3);
+            displayMgr.tft.setTextColor(TFT_GREENYELLOW); 
+            displayMgr.tft.setTextDatum(BC_DATUM);
+            int ldrVal = analogRead(LDR_PIN);
+            int ldrPct = (ldrVal * 100) / 4095;
+            char buf[16];
+            snprintf(buf, sizeof(buf), "LDR: %d%%", ldrPct);
+            displayMgr.tft.drawString(buf, 120, 230, 2);
+            displayMgr.unselectAll();
+        }
         if (i == 4) {
             displayMgr.selectDisplay(4);
             displayMgr.tft.setTextColor(TFT_DARKGREY); 
             displayMgr.tft.setTextDatum(BC_DATUM);
-            displayMgr.tft.drawString("gridscope.local", 120, 230);
+            displayMgr.tft.drawString("gridscope.local", 120, 230, 2);
             displayMgr.unselectAll();
         }
         if (i == 5) { 
             displayMgr.selectDisplay(5);
-            displayMgr.tft.setTextColor(TFT_GREENYELLOW); displayMgr.tft.setTextSize(1); displayMgr.tft.setTextDatum(BC_DATUM);
-            displayMgr.tft.drawString(WiFi.localIP().toString(), 120, 230);
+            displayMgr.tft.setTextColor(TFT_GREENYELLOW); 
+            displayMgr.tft.setTextDatum(BC_DATUM);
+            displayMgr.tft.drawString(WiFi.localIP().toString(), 120, 230, 2);
             displayMgr.unselectAll();
         }
 
@@ -98,6 +112,8 @@ void updateDisplays(bool force = false) {
 
 void setup() {
     Serial.begin(115200);
+    delay(2000);
+    Serial.println("--- Booting GridScope ---");
 
     // Initialize Filesystem early for logos
     if(!LittleFS.begin(true)) {
@@ -109,10 +125,27 @@ void setup() {
     // 1. On boot show logos on all screens
     displayMgr.drawLogoFromFile("/logo.jpg");
     
-    ledcSetup(0, 5000, 8); ledcAttachPin(25, 0); ledcWrite(0, 255); 
-    Wire.begin(21, 22); if (veml.begin()) hasVeml = true;
+#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+    ledcAttach(TFT_BL, 5000, 8); ledcWrite(TFT_BL, 255);
+#else
+    ledcSetup(0, 5000, 8); ledcAttachPin(TFT_BL, 0); ledcWrite(0, 255);
+#endif
+    Serial.println("Display Manager initialized. Setting up I2C...");
+    Wire.begin(21, 22);
+    Serial.println("Initializing VEML7700...");
+    if (veml.begin()) {
+        hasVeml = true;
+        Serial.println("VEML7700 found!");
+    } else {
+        Serial.println("VEML7700 not found, using LDR.");
+    }
     WiFi.setHostname("gridscope");
-    WiFi.persistent(true); WiFi.setAutoReconnect(true); WiFi.mode(WIFI_STA); WiFi.enableIpV6();
+    WiFi.persistent(true); WiFi.setAutoReconnect(true); WiFi.mode(WIFI_STA);
+#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+    WiFi.enableIPv6();
+#else
+    WiFi.enableIpV6();
+#endif
     
     wifiManager.setAPCallback(configModeCallback);
     wifiManager.setConnectTimeout(10);
@@ -197,6 +230,12 @@ void setup() {
 
     // Main App Initialization
     webConfig.begin();
+    if (MDNS.begin("gridscope")) {
+        MDNS.addService("http", "tcp", 80);
+        logMsg("mDNS responder started (gridscope.local)");
+    } else {
+        logMsg("Failed to start mDNS responder");
+    }
     dataMgr.begin(); // DataManager also calls LittleFS.begin(true)
     
     // 7. Try to get ntp time
@@ -236,10 +275,92 @@ void setup() {
     updateDisplays(true);
 }
 
-void loop() {
-    if (WiFi.status() != WL_CONNECTED) {
-        // No longer processing WiFiManager in loop
+void updateBacklight() {
+    static int lastLdrPct = -1;
+    static int lastPwmVal = -1;
+    static uint8_t lastMinPwm = 255;
+    static uint8_t lastMaxLdrPct = 255;
+
+    if (hasVeml) {
+        float lux = veml.readLux();
+        int pwm = map(lux, 0, 1000, 50, 255);
+        pwm = constrain(pwm, 10, 255);
+        if (pwm != lastPwmVal) {
+            lastPwmVal = pwm;
+#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+            ledcWrite(TFT_BL, pwm);
+#else
+            ledcWrite(0, pwm);
+#endif
+        }
     } else {
+        static bool ldrConnected = false;
+        int ldrVal = analogRead(LDR_PIN);
+        
+        if (!ldrConnected && ldrVal > 10) {
+            ldrConnected = true;
+            Serial.println("LDR sensor connection detected!");
+        }
+        
+        Config cfg = webConfig.getConfig();
+        int pwm;
+        if (ldrConnected) {
+            // Map LDR starting from 1% (41 raw ADC units) up to daylight threshold (where 100% slider = 6% raw LDR)
+            int maxLdrVal = (cfg.maxLdrPct * 6 * 4095) / 10000;
+            if (maxLdrVal <= 41) maxLdrVal = 42; // Ensure threshold is strictly above 1% darkness limit
+            
+            int mappedLdr = ldrVal;
+            if (mappedLdr < 41) mappedLdr = 41; // Clamp values below 1% to 1% (darkness floor)
+            
+            pwm = map(mappedLdr, 41, maxLdrVal, cfg.minPwm, 255);
+        } else {
+            // No LDR detected yet -> Default to maximum brightness
+            pwm = 255;
+        }
+        
+        pwm = constrain(pwm, 0, 255);
+        
+        // Write to PWM if PWM or config changed
+        if (pwm != lastPwmVal || cfg.minPwm != lastMinPwm || cfg.maxLdrPct != lastMaxLdrPct) {
+            lastPwmVal = pwm;
+            lastMinPwm = cfg.minPwm;
+            lastMaxLdrPct = cfg.maxLdrPct;
+#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+            ledcWrite(TFT_BL, pwm);
+#else
+            ledcWrite(0, pwm);
+#endif
+            Serial.printf("[Live Update] LDR Value: %d, PWM: %d, MinPWM: %d, MaxLDR: %d%%\n", 
+                          ldrVal, pwm, cfg.minPwm, cfg.maxLdrPct);
+        }
+        
+        // Draw LDR percentage at the bottom of the 4th screen (index 3)
+        int ldrPct = (ldrVal * 100) / 4095;
+        if (ldrPct != lastLdrPct) {
+            lastLdrPct = ldrPct;
+            char buf[16];
+            snprintf(buf, sizeof(buf), "LDR: %d%%", ldrPct);
+            displayMgr.selectDisplay(3);
+            displayMgr.tft.setTextColor(TFT_GREENYELLOW, TFT_BLACK); 
+            displayMgr.tft.setTextDatum(BC_DATUM);
+            displayMgr.tft.drawString(buf, 120, 230, 2);
+            displayMgr.unselectAll();
+        }
+        
+        // Throttle general status logging
+        static unsigned long lastLog = 0;
+        if (millis() - lastLog > 2000) {
+            Serial.printf("LDR Value: %d (%d%%), PWM: %d (Detected: %s, MinPWM: %d, MaxLDR: %d%%)\n", 
+                          ldrVal, ldrPct, pwm, ldrConnected ? "Yes" : "No", cfg.minPwm, cfg.maxLdrPct);
+            lastLog = millis();
+        }
+    }
+}
+
+void loop() {
+    static unsigned long lastLoopBacklight = 0;
+    
+    if (WiFi.status() == WL_CONNECTED) {
         static bool timeSynced = false;
         static unsigned long lastNtpTry = 0;
         
@@ -285,11 +406,12 @@ void loop() {
             } 
         }
     }
-    if (hasVeml) {
-        float lux = veml.readLux();
-        int pwm = map(lux, 0, 1000, 50, 255);
-        pwm = constrain(pwm, 10, 255);
-        ledcWrite(0, pwm);
-        delay(500);
-    } else { delay(100); }
+    
+    // Non-blocking backlight check every 100ms
+    if (millis() - lastLoopBacklight > 100 || lastLoopBacklight == 0) {
+        updateBacklight();
+        lastLoopBacklight = millis();
+    }
+    
+    delay(10);
 }

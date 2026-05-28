@@ -13,7 +13,9 @@ struct DisplayRange {
 };
 
 // CS pins for each display
-const uint8_t csPins[NUM_DISPLAYS] = {5, 17, 16, 2, 12, 13};
+const uint8_t csPins[NUM_DISPLAYS] = {1, 2, 4, 7, 6, 5};
+// Rotation for each display (0: Normal, 2: Flipped 180°)
+const uint8_t displayRotations[NUM_DISPLAYS] = {0, 0, 0, 2, 2, 2};
 
 class DisplayManager {
 public:
@@ -32,6 +34,7 @@ public:
     TFT_eSprite* sprite;
 
 private:
+    bool _initialized;
     void drawWrappedArc(int x, int y, int r, int ir, int start, int end, uint16_t color);
 };
 

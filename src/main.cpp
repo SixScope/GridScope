@@ -13,10 +13,8 @@ Adafruit_VEML7700 veml = Adafruit_VEML7700();
 WiFiManager wifiManager;
 bool hasVeml = false;
 const int LDR_PIN = 3;
-unsigned long lastDataUpdate = 0;
-unsigned long lastFreqUpdate = 0;
-const unsigned long UPDATE_INTERVAL = 300000; 
-const unsigned long FREQ_UPDATE_INTERVAL = 60000;
+volatile bool displaysNeedRefresh = false;
+volatile bool forceFetchRequest = false;
 
 void drawQRCode(uint8_t screenIdx, const char* text) {
     QRCode qrcode; uint8_t qrcodeData[qrcode_getBufferSize(4)]; 
@@ -107,6 +105,59 @@ void updateDisplays(bool force = false) {
 
         lastVal[i] = val;
         lastIdx[i] = gaugeIdx;
+    }
+}
+
+void dataFetchTask(void *parameter) {
+    unsigned long lastFreqUpdate = 0;
+    unsigned long lastDataUpdate = 0;
+    const unsigned long FREQ_UPDATE_INTERVAL = 60000;
+    const unsigned long UPDATE_INTERVAL = 300000;
+    
+    // Wait until connected to WiFi
+    while (WiFi.status() != WL_CONNECTED) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    
+    // Perform initial fetches immediately in the background
+    lastFreqUpdate = 0;
+    lastDataUpdate = 0;
+    
+    while (true) {
+        if (WiFi.status() == WL_CONNECTED) {
+            bool needsRefresh = false;
+            unsigned long now = millis();
+            
+            if (forceFetchRequest) {
+                forceFetchRequest = false;
+                logMsg("Forcing immediate background data fetch...");
+                if (dataMgr.fetchElexonFrequency()) {
+                    needsRefresh = true;
+                }
+                lastFreqUpdate = now;
+            }
+            
+            // Background frequency fetch
+            if (now - lastFreqUpdate >= FREQ_UPDATE_INTERVAL || lastFreqUpdate == 0) {
+                if (dataMgr.fetchElexonFrequency()) {
+                    needsRefresh = true;
+                }
+                lastFreqUpdate = now;
+            }
+            
+            // Background general data fetch
+            if (now - lastDataUpdate >= UPDATE_INTERVAL || lastDataUpdate == 0) {
+                if (dataMgr.updateData()) {
+                    needsRefresh = true;
+                }
+                lastDataUpdate = now;
+            }
+            
+            if (needsRefresh) {
+                displaysNeedRefresh = true;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
@@ -267,12 +318,16 @@ void setup() {
     displayMgr.tft.drawString("Querying API...", 120, 120, 4);
     displayMgr.unselectAll();
 
-    // 8. Fetch data before clearing logos/status
-    dataMgr.updateData();
-    
-    // 9. Now clear and show gauges
-    displayMgr.clearAll();
-    updateDisplays(true);
+    // 8. Spawn FreeRTOS task on Core 0 for background network fetches
+    xTaskCreatePinnedToCore(
+        dataFetchTask,
+        "dataFetchTask",
+        8192,
+        NULL,
+        1,
+        NULL,
+        0
+    );
 }
 
 void updateBacklight() {
@@ -372,9 +427,8 @@ void loop() {
                     if (timeinfo.tm_year > 100) { // year > 2000
                         timeSynced = true;
                         logMsg("NTP Time Synced!");
-                        // Force immediate frequency update after sync
-                        if (dataMgr.fetchElexonFrequency()) updateDisplays();
-                        lastFreqUpdate = millis();
+                        // Force immediate frequency update after sync in background
+                        forceFetchRequest = true;
                     }
                 }
             }
@@ -388,22 +442,17 @@ void loop() {
             }
         }
 
-        // Independent Frequency Update (every 1 minute)
-        if (millis() - lastFreqUpdate > FREQ_UPDATE_INTERVAL || lastFreqUpdate == 0) {
-            if (dataMgr.fetchElexonFrequency()) {
-                updateDisplays();
-            }
-            lastFreqUpdate = millis();
-        }
-
-        // General Data Update (every 5 minutes)
-        if (millis() - lastDataUpdate > UPDATE_INTERVAL || lastDataUpdate == 0) {
-            if (dataMgr.updateData()) { 
-                updateDisplays(); 
-                lastDataUpdate = millis(); 
+        // Check if background task fetched new data and redraw displays
+        if (displaysNeedRefresh) {
+            static bool initialClearDone = false;
+            displaysNeedRefresh = false;
+            if (!initialClearDone) {
+                initialClearDone = true;
+                displayMgr.clearAll();
+                updateDisplays(true); // Force redraw on first success
             } else {
                 updateDisplays();
-            } 
+            }
         }
     }
     

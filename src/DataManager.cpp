@@ -11,6 +11,7 @@ DataManager::DataManager() {
     demandValue = 0;
     currentSolar = 0;
     demandAdjust = 0;
+    mutex = xSemaphoreCreateMutex();
 }
 
 void DataManager::begin() {
@@ -38,62 +39,94 @@ bool DataManager::loadConfig() {
     }
     JsonArray arr = doc.as<JsonArray>();
     logMsg("Parsed JSON array with %d entries", arr.size());
-    numConfigs = 0;
-    for (JsonObject obj : arr) {
-        if (numConfigs >= 20) break;
-        configs[numConfigs].id = obj["id"] | obj["name"].as<String>();
-        configs[numConfigs].id.toLowerCase();
-        configs[numConfigs].id.replace(" ", "_");
-        configs[numConfigs].name = obj["name"].as<String>();
-        configs[numConfigs].unit = obj["unit"].as<String>();
-        JsonArray fuelTypes = obj["fuelType"];
-        if (fuelTypes.isNull()) {
-            configs[numConfigs].fuelTypes[0] = obj["fuelType"].as<String>();
-            configs[numConfigs].numFuelTypes = 1;
-        } else {
-            configs[numConfigs].numFuelTypes = 0;
-            for(JsonVariant ft : fuelTypes) {
-                if (configs[numConfigs].numFuelTypes < 10) {
-                    configs[numConfigs].fuelTypes[configs[numConfigs].numFuelTypes++] = ft.as<String>();
+    
+    if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
+        numConfigs = 0;
+        for (JsonObject obj : arr) {
+            if (numConfigs >= 20) break;
+            configs[numConfigs].id = obj["id"] | obj["name"].as<String>();
+            configs[numConfigs].id.toLowerCase();
+            configs[numConfigs].id.replace(" ", "_");
+            configs[numConfigs].name = obj["name"].as<String>();
+            configs[numConfigs].unit = obj["unit"].as<String>();
+            JsonArray fuelTypes = obj["fuelType"];
+            if (fuelTypes.isNull()) {
+                configs[numConfigs].fuelTypes[0] = obj["fuelType"].as<String>();
+                configs[numConfigs].numFuelTypes = 1;
+            } else {
+                configs[numConfigs].numFuelTypes = 0;
+                for(JsonVariant ft : fuelTypes) {
+                    if (configs[numConfigs].numFuelTypes < 10) {
+                        configs[numConfigs].fuelTypes[configs[numConfigs].numFuelTypes++] = ft.as<String>();
+                    }
                 }
             }
+            JsonArray ranges = obj["ranges"];
+            configs[numConfigs].numRanges = ranges.size();
+            for(int i=0; i<ranges.size() && i<10; i++) {
+                configs[numConfigs].ranges[i].min = ranges[i]["min"].as<float>();
+                configs[numConfigs].ranges[i].max = ranges[i]["max"].as<float>();
+                configs[numConfigs].ranges[i].redzone = ranges[i]["redzone"].as<int>();
+            }
+            configs[numConfigs].currentValue = 0;
+            configs[numConfigs].currentPct = -1;
+            configs[numConfigs].lastUpdateSuccess = true;
+            numConfigs++;
         }
-        JsonArray ranges = obj["ranges"];
-        configs[numConfigs].numRanges = ranges.size();
-        for(int i=0; i<ranges.size() && i<10; i++) {
-            configs[numConfigs].ranges[i].min = ranges[i]["min"].as<float>();
-            configs[numConfigs].ranges[i].max = ranges[i]["max"].as<float>();
-            configs[numConfigs].ranges[i].redzone = ranges[i]["redzone"].as<int>();
-        }
-        configs[numConfigs].currentValue = 0;
-        configs[numConfigs].currentPct = -1;
-        configs[numConfigs].lastUpdateSuccess = true;
-        numConfigs++;
+        xSemaphoreGive(mutex);
     }
     file.close();
     return true;
 }
 
 GaugeConfig DataManager::getGaugeConfig(int index) {
-    if (index >= 0 && index < numConfigs) return configs[index];
-    return GaugeConfig();
+    GaugeConfig cfg;
+    if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
+        if (index >= 0 && index < numConfigs) cfg = configs[index];
+        xSemaphoreGive(mutex);
+    }
+    return cfg;
 }
 
 GaugeConfig DataManager::getGaugeConfigById(String id) {
-    for(int i=0; i<numConfigs; i++) {
-        if (configs[i].id == id) return configs[i];
+    GaugeConfig cfg;
+    if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
+        for(int i=0; i<numConfigs; i++) {
+            if (configs[i].id == id) {
+                cfg = configs[i];
+                break;
+            }
+        }
+        xSemaphoreGive(mutex);
     }
-    return GaugeConfig();
+    return cfg;
 }
 
 String DataManager::getGaugeId(int index) {
-    if (index >= 0 && index < numConfigs) return configs[index].id;
-    return "";
+    String id = "";
+    if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
+        if (index >= 0 && index < numConfigs) id = configs[index].id;
+        xSemaphoreGive(mutex);
+    }
+    return id;
 }
 
 String DataManager::getGaugeName(int index) {
-    if (index >= 0 && index < numConfigs) return configs[index].name;
-    return "";
+    String name = "";
+    if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
+        if (index >= 0 && index < numConfigs) name = configs[index].name;
+        xSemaphoreGive(mutex);
+    }
+    return name;
+}
+
+float DataManager::getDemandValue() {
+    float val = 0;
+    if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
+        val = demandValue;
+        xSemaphoreGive(mutex);
+    }
+    return val;
 }
 
 String getISO8601(time_t t) {
@@ -133,38 +166,42 @@ bool DataManager::updateData() {
     float localDemandValue = apiDemand + localDemandAdjust;
     logMsg("Demand: Base=%.1f, Adj=%.1f, Total=%.1f GW | sGen:%d sSolar:%d sDemand:%d", apiDemand, localDemandAdjust, localDemandValue, sGen, sSolar, sDemand);
     
-    for(int i=0; i<numConfigs; i++) {
-        bool usesDemand = false;
-        bool usesFreq = false;
-        bool usesGen = false;
-        bool usesSolar = false;
+    if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
+        demandValue = localDemandValue;
+        for(int i=0; i<numConfigs; i++) {
+            bool usesDemand = false;
+            bool usesFreq = false;
+            bool usesGen = false;
+            bool usesSolar = false;
 
-        for(int j=0; j<configs[i].numFuelTypes; j++) {
-            if (configs[i].fuelTypes[j] == "DEMAND") usesDemand = true;
-            else if (configs[i].fuelTypes[j] == "FREQ") usesFreq = true;
-            else if (configs[i].fuelTypes[j] == "SOLAR") usesSolar = true;
-            else usesGen = true;
-        }
+            for(int j=0; j<configs[i].numFuelTypes; j++) {
+                if (configs[i].fuelTypes[j] == "DEMAND") usesDemand = true;
+                else if (configs[i].fuelTypes[j] == "FREQ") usesFreq = true;
+                else if (configs[i].fuelTypes[j] == "SOLAR") usesSolar = true;
+                else usesGen = true;
+            }
 
-        bool success = true;
-        if (usesGen && !sGen) success = false;
-        if (usesSolar && !sSolar) success = false;
-        if (usesDemand && (!sDemand || !sGen || !sSolar)) success = false;
+            bool success = true;
+            if (usesGen && !sGen) success = false;
+            if (usesSolar && !sSolar) success = false;
+            if (usesDemand && (!sDemand || !sGen || !sSolar)) success = false;
 
-        if (configs[i].lastUpdateSuccess != success) {
-            logMsg("Gauge '%s' status changed to: %s", configs[i].name.c_str(), success ? "OK" : "FAILED");
-        }
-        configs[i].lastUpdateSuccess = success;
+            if (configs[i].lastUpdateSuccess != success) {
+                logMsg("Gauge '%s' status changed to: %s", configs[i].name.c_str(), success ? "OK" : "FAILED");
+            }
+            configs[i].lastUpdateSuccess = success;
 
-        if (success) {
-            if (usesDemand) configs[i].currentValue = localDemandValue;
-            else if (!usesFreq) configs[i].currentValue = nextValues[i];
-            
-            // Update percentage
-            if (localDemandValue > 0 && !usesDemand && !usesFreq) {
-                configs[i].currentPct = (configs[i].currentValue / localDemandValue) * 100.0;
+            if (success) {
+                if (usesDemand) configs[i].currentValue = localDemandValue;
+                else if (!usesFreq) configs[i].currentValue = nextValues[i];
+                
+                // Update percentage
+                if (localDemandValue > 0 && !usesDemand && !usesFreq) {
+                    configs[i].currentPct = (configs[i].currentValue / localDemandValue) * 100.0;
+                }
             }
         }
+        xSemaphoreGive(mutex);
     }
 
     // 5. Frequency
@@ -226,14 +263,17 @@ bool DataManager::fetchElexonFrequency() {
                 }
 
                 if (val > 0) {
-                    for(int i=0; i<numConfigs; i++) {
-                        for(int j=0; j<configs[i].numFuelTypes; j++) {
-                            if(configs[i].fuelTypes[j] == "FREQ") {
-                                configs[i].currentValue = val;
-                                configs[i].lastUpdateSuccess = true;
-                                break;
+                    if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
+                        for(int i=0; i<numConfigs; i++) {
+                            for(int j=0; j<configs[i].numFuelTypes; j++) {
+                                if(configs[i].fuelTypes[j] == "FREQ") {
+                                    configs[i].currentValue = val;
+                                    configs[i].lastUpdateSuccess = true;
+                                    break;
+                                }
                             }
                         }
+                        xSemaphoreGive(mutex);
                     }
                     logMsg("Grid Frequency updated: %.3f Hz (from %d pts)", val, dataPoints);
                     success = true;
@@ -252,13 +292,16 @@ bool DataManager::fetchElexonFrequency() {
 
     if (!success) {
         // Explicitly mark FREQ gauges as failed if we didn't get a value
-        for(int i=0; i<numConfigs; i++) {
-            for(int j=0; j<configs[i].numFuelTypes; j++) {
-                if(configs[i].fuelTypes[j] == "FREQ") {
-                    configs[i].lastUpdateSuccess = false;
-                    break;
+        if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
+            for(int i=0; i<numConfigs; i++) {
+                for(int j=0; j<configs[i].numFuelTypes; j++) {
+                    if(configs[i].fuelTypes[j] == "FREQ") {
+                        configs[i].lastUpdateSuccess = false;
+                        break;
+                    }
                 }
             }
+            xSemaphoreGive(mutex);
         }
     }
     return success;

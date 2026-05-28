@@ -4,6 +4,8 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <LittleFS.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 struct RangeConfig {
     float min = 0;
@@ -40,7 +42,7 @@ public:
     int getNumConfigs() { return numConfigs; }
     String getGaugeId(int index);
     String getGaugeName(int index);
-    float getDemandValue() { return demandValue; }
+    float getDemandValue();
 
 private:
     GaugeConfig configs[20];
@@ -49,6 +51,7 @@ private:
     float currentSolar = 0;
     float demandAdjust = 0;
     GridData currentData;
+    SemaphoreHandle_t mutex;
     
     bool fetchElexonGeneration(float* nextValues, float& localDemandAdjust);
     bool fetchElexonDemand(float &apiDemand);

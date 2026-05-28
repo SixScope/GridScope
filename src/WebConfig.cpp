@@ -33,8 +33,8 @@ extern void updateDisplays(bool force = false);
 
 WebConfig::WebConfig() : server(80), events("/events") {
     for(int i=0; i<6; i++) currentConfig.screenData[i] = (DisplayDataType)i;
-    currentConfig.minPwm = 30;
-    currentConfig.maxLdrPct = 6;
+    currentConfig.minPwm = 10;
+    currentConfig.maxLdrPct = 25;
 }
 
 void WebConfig::begin() {
@@ -89,8 +89,8 @@ void WebConfig::loadConfig() {
         String k = "s" + String(i+1);
         currentConfig.screenData[i] = (DisplayDataType)preferences.getInt(k.c_str(), i);
     }
-    currentConfig.minPwm = preferences.getUChar("minPwm", 30);
-    currentConfig.maxLdrPct = preferences.getUChar("maxLdr", 6);
+    currentConfig.minPwm = preferences.getUChar("minPwm", 10);
+    currentConfig.maxLdrPct = preferences.getUChar("maxLdr", 25);
     preferences.end();
 }
 

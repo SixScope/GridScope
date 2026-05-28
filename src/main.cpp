@@ -15,6 +15,7 @@ bool hasVeml = false;
 const int LDR_PIN = 3;
 volatile bool displaysNeedRefresh = false;
 volatile bool forceFetchRequest = false;
+volatile bool forceDisplaysRefresh = false;
 
 void drawQRCode(uint8_t screenIdx, const char* text) {
     QRCode qrcode; uint8_t qrcodeData[qrcode_getBufferSize(4)]; 
@@ -443,15 +444,17 @@ void loop() {
         }
 
         // Check if background task fetched new data and redraw displays
-        if (displaysNeedRefresh) {
-            static bool initialClearDone = false;
+        if (displaysNeedRefresh || forceDisplaysRefresh) {
+            bool force = forceDisplaysRefresh;
             displaysNeedRefresh = false;
+            forceDisplaysRefresh = false;
+            static bool initialClearDone = false;
             if (!initialClearDone) {
                 initialClearDone = true;
                 displayMgr.clearAll();
                 updateDisplays(true); // Force redraw on first success
             } else {
-                updateDisplays();
+                updateDisplays(force);
             }
         }
     }

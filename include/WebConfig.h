@@ -42,6 +42,7 @@ private:
 };
 
 extern WebConfig webConfig;
+extern volatile bool forceDisplaysRefresh;
 void logMsg(const char* format, ...);
 
 #endif

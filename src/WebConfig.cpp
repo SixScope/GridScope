@@ -60,7 +60,7 @@ void WebConfig::begin() {
         if(request->hasParam("minPwm", true)) currentConfig.minPwm = request->getParam("minPwm", true)->value().toInt();
         if(request->hasParam("maxLdr", true)) currentConfig.maxLdrPct = request->getParam("maxLdr", true)->value().toInt();
         saveConfig();
-        updateDisplays(); // Refresh physical screens immediately
+        forceDisplaysRefresh = true; // Safe thread-safe refresh trigger
         request->redirect("/");
     });
     server.on("/set_brightness", HTTP_GET, [this](AsyncWebServerRequest *request){
@@ -69,6 +69,23 @@ void WebConfig::begin() {
         }
         if(request->hasParam("maxLdr")) {
             currentConfig.maxLdrPct = request->getParam("maxLdr")->value().toInt();
+        }
+        request->send(200, "text/plain", "OK");
+    });
+    server.on("/set_display", HTTP_GET, [this](AsyncWebServerRequest *request){
+        bool updated = false;
+        for(int i = 0; i < 6; i++) {
+            String p = "s" + String(i + 1);
+            if(request->hasParam(p)) {
+                int val = request->getParam(p)->value().toInt();
+                currentConfig.screenData[i] = (DisplayDataType)val;
+                updated = true;
+                logMsg(("WebConfig: Live updated Screen " + String(i + 1) + " to gauge " + String(val)).c_str());
+            }
+        }
+        if(updated) {
+            saveConfig();
+            forceDisplaysRefresh = true; // Safe thread-safe refresh trigger
         }
         request->send(200, "text/plain", "OK");
     });
@@ -126,7 +143,7 @@ String WebConfig::buildHtml() {
     
     int numGauges = dataMgr.getNumConfigs();
     for(int i=0; i<6; i++) {
-        html += "<label>Screen " + String(i+1) + "</label><select name='s" + String(i+1) + "'>";
+        html += "<label>Screen " + String(i+1) + "</label><select name='s" + String(i+1) + "' onchange='updateDisplayLive(this.name, this.value)'>";
         for(int j=0; j<numGauges; j++) {
             html += "<option value='" + String(j) + "'" + (currentConfig.screenData[i] == j ? " selected" : "") + ">" + dataMgr.getGaugeName(j) + "</option>";
         }
@@ -152,6 +169,6 @@ String WebConfig::buildHtml() {
     html += "</div>";
     
     html += "<button type='submit'>Save Configuration</button></form><h3>System Log</h3><div id='log'></div></div>";
-    html += "<script>var source = new EventSource('/events'); source.addEventListener('log', function(e) { var log = document.getElementById('log'); log.innerHTML += e.data + '<br>'; log.scrollTop = log.scrollHeight; }, false); var debounceTimer; function updateBrightnessLive(param, value) { clearTimeout(debounceTimer); debounceTimer = setTimeout(function() { fetch('/set_brightness?' + param + '=' + value); }, 50); }</script></body></html>";
+    html += "<script>var source = new EventSource('/events'); source.addEventListener('log', function(e) { var log = document.getElementById('log'); log.innerHTML += e.data + '<br>'; log.scrollTop = log.scrollHeight; }, false); var debounceTimer; function updateBrightnessLive(param, value) { clearTimeout(debounceTimer); debounceTimer = setTimeout(function() { fetch('/set_brightness?' + param + '=' + value); }, 50); } function updateDisplayLive(param, value) { fetch('/set_display?' + param + '=' + value); }</script></body></html>";
     return html;
 }

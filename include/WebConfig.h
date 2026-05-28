@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <ESPAsyncWebServer.h>
+#include <freertos/semphr.h>
 
 enum DisplayDataType {
     DATA_DEMAND = 0,
@@ -34,6 +35,7 @@ private:
     AsyncEventSource events;
     Preferences preferences;
     Config currentConfig;
+    SemaphoreHandle_t configMutex;
     
     void loadConfig();
     void saveConfig();

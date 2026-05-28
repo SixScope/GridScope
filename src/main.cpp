@@ -16,6 +16,7 @@ const int LDR_PIN = 3;
 volatile bool displaysNeedRefresh = false;
 volatile bool forceFetchRequest = false;
 volatile bool forceDisplaysRefresh = false;
+volatile int lastFilteredLdr = 0;
 
 void drawQRCode(uint8_t screenIdx, const char* text) {
     QRCode qrcode; uint8_t qrcodeData[qrcode_getBufferSize(4)]; 
@@ -82,7 +83,7 @@ void updateDisplays(bool force = false) {
             displayMgr.selectDisplay(3);
             displayMgr.tft.setTextColor(TFT_GREENYELLOW); 
             displayMgr.tft.setTextDatum(BC_DATUM);
-            int ldrVal = analogRead(LDR_PIN);
+            int ldrVal = lastFilteredLdr;
             int ldrPct = (ldrVal * 100) / 4095;
             char buf[16];
             snprintf(buf, sizeof(buf), "LDR: %d%%", ldrPct);
@@ -351,7 +352,18 @@ void updateBacklight() {
         }
     } else {
         static bool ldrConnected = false;
-        int ldrVal = analogRead(LDR_PIN);
+        int rawLdr = analogRead(LDR_PIN);
+        
+        static float filteredLdr = -1.0f;
+        if (filteredLdr < 0) {
+            filteredLdr = rawLdr;
+        } else {
+            // Apply Exponential Moving Average (EMA) filter to smooth out ADC noise.
+            // alpha = 0.05 gives smooth, flicker-free transitions (approx 2s response time)
+            filteredLdr = (0.05f * rawLdr) + (0.95f * filteredLdr);
+        }
+        int ldrVal = (int)(filteredLdr + 0.5f);
+        lastFilteredLdr = ldrVal;
         
         if (!ldrConnected && ldrVal > 10) {
             ldrConnected = true;
@@ -367,6 +379,7 @@ void updateBacklight() {
             
             int mappedLdr = ldrVal;
             if (mappedLdr < 41) mappedLdr = 41; // Clamp values below 1% to 1% (darkness floor)
+            if (mappedLdr > maxLdrVal) mappedLdr = maxLdrVal; // Clamp to threshold to prevent extrapolation in map()
             
             pwm = map(mappedLdr, 41, maxLdrVal, cfg.minPwm, 255);
         } else {

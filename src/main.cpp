@@ -372,7 +372,7 @@ void updateBacklight() {
             float diff = abs(rawLdr - filteredLdr);
             float ratio = diff / 1000.0f;
             if (ratio > 1.0f) ratio = 1.0f;
-            float alpha = 0.03f + (0.47f * ratio);
+            float alpha = 0.03f + (0.12f * ratio); // Cap maximum alpha at 0.15 to keep noise filtered
             filteredLdr = (alpha * rawLdr) + ((1.0f - alpha) * filteredLdr);
         }
         int ldrVal = (int)(filteredLdr + 0.5f);
@@ -392,19 +392,33 @@ void updateBacklight() {
         int pwm = map(mappedLdr, minLdrVal, maxLdrVal, cfg.minPwm, 255);
         pwm = constrain(pwm, 0, 255);
         
+        // Slew the physical PWM slowly towards the target PWM to prevent feedback oscillations
+        static float currentPwm = -1.0f;
+        if (currentPwm < 0) {
+            currentPwm = pwm;
+        } else {
+            // Limit change rate to max 8 PWM steps per 100ms (approx 3 seconds for full transition)
+            float diff = pwm - currentPwm;
+            float maxStep = 8.0f;
+            if (diff > maxStep) diff = maxStep;
+            if (diff < -maxStep) diff = -maxStep;
+            currentPwm += diff;
+        }
+        int finalPwm = (int)(currentPwm + 0.5f);
+        
         // Write to PWM if PWM or config changed
-        if (pwm != lastPwmVal || cfg.minPwm != lastMinPwm || cfg.minLdrPct != lastMinLdrPct || cfg.maxLdrPct != lastMaxLdrPct) {
-            lastPwmVal = pwm;
+        if (finalPwm != lastPwmVal || cfg.minPwm != lastMinPwm || cfg.minLdrPct != lastMinLdrPct || cfg.maxLdrPct != lastMaxLdrPct) {
+            lastPwmVal = finalPwm;
             lastMinPwm = cfg.minPwm;
             lastMinLdrPct = cfg.minLdrPct;
             lastMaxLdrPct = cfg.maxLdrPct;
 #if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
-            ledcWrite(TFT_BL, pwm);
+            ledcWrite(TFT_BL, finalPwm);
 #else
-            ledcWrite(0, pwm);
+            ledcWrite(0, finalPwm);
 #endif
-            Serial.printf("[Live Update] LDR Value: %d, PWM: %d, MinPWM: %d, MinLDR: %d%%, MaxLDR: %d%%\n", 
-                          ldrVal, pwm, cfg.minPwm, cfg.minLdrPct, cfg.maxLdrPct);
+            Serial.printf("[Live Update] LDR Value: %d, TargetPWM: %d, FinalPWM: %d, MinPWM: %d, MinLDR: %d%%, MaxLDR: %d%%\n", 
+                          ldrVal, pwm, finalPwm, cfg.minPwm, cfg.minLdrPct, cfg.maxLdrPct);
         }
         
         // Draw LDR percentage at the bottom of the 4th screen (index 3)
@@ -424,7 +438,7 @@ void updateBacklight() {
         static unsigned long lastLog = 0;
         if (millis() - lastLog > 2000) {
             Serial.printf("LDR Value: %d (%d%%), PWM: %d, MinPWM: %d, MinLDR: %d%%, MaxLDR: %d%%\n", 
-                          ldrVal, ldrPct, pwm, cfg.minPwm, cfg.minLdrPct, cfg.maxLdrPct);
+                          ldrVal, ldrPct, finalPwm, cfg.minPwm, cfg.minLdrPct, cfg.maxLdrPct);
             lastLog = millis();
         }
     }

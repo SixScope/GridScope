@@ -359,9 +359,14 @@ void updateBacklight() {
         if (filteredLdr < 0) {
             filteredLdr = rawLdr;
         } else {
-            // Apply Exponential Moving Average (EMA) filter to smooth out ADC noise.
-            // alpha = 0.05 gives smooth, flicker-free transitions (approx 2s response time)
-            filteredLdr = (0.05f * rawLdr) + (0.95f * filteredLdr);
+            // Apply Adaptive Exponential Moving Average (EMA) filter.
+            // Small changes (noise) use a small alpha (0.03) for maximum stability.
+            // Large changes scale alpha up to 0.5 for fast response (approx. 500ms).
+            float diff = abs(rawLdr - filteredLdr);
+            float ratio = diff / 1000.0f;
+            if (ratio > 1.0f) ratio = 1.0f;
+            float alpha = 0.03f + (0.47f * ratio);
+            filteredLdr = (alpha * rawLdr) + ((1.0f - alpha) * filteredLdr);
         }
         int ldrVal = (int)(filteredLdr + 0.5f);
         lastFilteredLdr = ldrVal;

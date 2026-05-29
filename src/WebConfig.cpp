@@ -182,7 +182,7 @@ String WebConfig::buildHtml() {
     
     html += "<div style='margin-bottom:15px;'>";
     html += "  <div style='display:flex;justify-content:space-between;margin-bottom:5px;'>";
-    html += "    <label>Minimum Brightness (0-255)</label>";
+    html += "    <label>Minimum Brightness (0-255) <span style='font-size:11px;color:#aaa;'>(Default fixed level if LDR is missing)</span></label>";
     html += "    <span id='minPwmVal' style='color:#f39c12;font-weight:bold;'>" + String(cfg.minPwm) + "</span>";
     html += "  </div>";
     html += "  <input type='range' name='minPwm' min='0' max='255' value='" + String(cfg.minPwm) + "' class='slider' oninput='document.getElementById(\"minPwmVal\").innerText=this.value; updateBrightnessLive(\"minPwm\", this.value);'>";
@@ -190,7 +190,7 @@ String WebConfig::buildHtml() {
     
     html += "<div style='margin-bottom:15px;'>";
     html += "  <div style='display:flex;justify-content:space-between;margin-bottom:5px;'>";
-    html += "    <label>Daylight Threshold LDR (1-100%)</label>";
+    html += "    <label>Daylight Threshold LDR (1-100%) <span style='font-size:11px;color:#aaa;'>(LDR percentage that triggers maximum brightness)</span></label>";
     html += "    <span id='maxLdrVal' style='color:#f39c12;font-weight:bold;'>" + String(cfg.maxLdrPct) + "%</span>";
     html += "  </div>";
     html += "  <input type='range' name='maxLdr' min='1' max='100' value='" + String(cfg.maxLdrPct) + "' class='slider' oninput='document.getElementById(\"maxLdrVal\").innerText=this.value+\"%\"; updateBrightnessLive(\"maxLdr\", this.value);'>";

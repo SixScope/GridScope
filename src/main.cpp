@@ -351,7 +351,6 @@ void updateBacklight() {
 #endif
         }
     } else {
-        static bool ldrConnected = false;
         int rawLdr = analogRead(LDR_PIN);
         
         static float filteredLdr = -1.0f;
@@ -365,28 +364,17 @@ void updateBacklight() {
         int ldrVal = (int)(filteredLdr + 0.5f);
         lastFilteredLdr = ldrVal;
         
-        if (!ldrConnected && ldrVal > 10) {
-            ldrConnected = true;
-            Serial.println("LDR sensor connection detected!");
-        }
-        
         Config cfg = webConfig.getConfig();
-        int pwm;
-        if (ldrConnected) {
-            // Map LDR starting from 1% (41 raw ADC units) up to daylight threshold (where 100% slider = 6% raw LDR)
-            int maxLdrVal = (cfg.maxLdrPct * 6 * 4095) / 10000;
-            if (maxLdrVal <= 41) maxLdrVal = 42; // Ensure threshold is strictly above 1% darkness limit
-            
-            int mappedLdr = ldrVal;
-            if (mappedLdr < 41) mappedLdr = 41; // Clamp values below 1% to 1% (darkness floor)
-            if (mappedLdr > maxLdrVal) mappedLdr = maxLdrVal; // Clamp to threshold to prevent extrapolation in map()
-            
-            pwm = map(mappedLdr, 41, maxLdrVal, cfg.minPwm, 255);
-        } else {
-            // No LDR detected yet -> Default to maximum brightness
-            pwm = 255;
-        }
         
+        // Map LDR starting from 1% (41 raw ADC units) up to daylight threshold (where 1% to 100% slider maps to 1% to 100% of the 12-bit ADC range)
+        int maxLdrVal = (cfg.maxLdrPct * 4095) / 100;
+        if (maxLdrVal <= 41) maxLdrVal = 42; // Ensure threshold is strictly above 1% darkness limit
+        
+        int mappedLdr = ldrVal;
+        if (mappedLdr < 41) mappedLdr = 41; // Clamp values below 1% to 1% (darkness floor)
+        if (mappedLdr > maxLdrVal) mappedLdr = maxLdrVal; // Clamp to threshold to prevent extrapolation in map()
+        
+        int pwm = map(mappedLdr, 41, maxLdrVal, cfg.minPwm, 255);
         pwm = constrain(pwm, 0, 255);
         
         // Write to PWM if PWM or config changed
@@ -419,8 +407,8 @@ void updateBacklight() {
         // Throttle general status logging
         static unsigned long lastLog = 0;
         if (millis() - lastLog > 2000) {
-            Serial.printf("LDR Value: %d (%d%%), PWM: %d (Detected: %s, MinPWM: %d, MaxLDR: %d%%)\n", 
-                          ldrVal, ldrPct, pwm, ldrConnected ? "Yes" : "No", cfg.minPwm, cfg.maxLdrPct);
+            Serial.printf("LDR Value: %d (%d%%), PWM: %d, MinPWM: %d, MaxLDR: %d%%\n", 
+                          ldrVal, ldrPct, pwm, cfg.minPwm, cfg.maxLdrPct);
             lastLog = millis();
         }
     }

@@ -299,6 +299,7 @@ void setup() {
     displayMgr.tft.drawString("Getting NTP Time...", 120, 120, 4);
     displayMgr.unselectAll();
 
+    delay(500);
     configTime(0, 0, "pool.ntp.org", "time.nist.gov");
     setenv("TZ", "GMT0BST,M3.5.0/1,M10.5.0", 1);
     tzset();
@@ -336,6 +337,7 @@ void updateBacklight() {
     static int lastLdrPct = -1;
     static int lastPwmVal = -1;
     static uint8_t lastMinPwm = 255;
+    static uint8_t lastMinLdrPct = 255;
     static uint8_t lastMaxLdrPct = 255;
 
     if (hasVeml) {
@@ -366,29 +368,31 @@ void updateBacklight() {
         
         Config cfg = webConfig.getConfig();
         
-        // Map LDR starting from 1% (41 raw ADC units) up to daylight threshold (where 1% to 100% slider maps to 1% to 100% of the 12-bit ADC range)
+        // Map LDR starting from darkness threshold (cfg.minLdrPct) up to daylight threshold (cfg.maxLdrPct)
+        int minLdrVal = (cfg.minLdrPct * 4095) / 100;
         int maxLdrVal = (cfg.maxLdrPct * 4095) / 100;
-        if (maxLdrVal <= 41) maxLdrVal = 42; // Ensure threshold is strictly above 1% darkness limit
+        if (maxLdrVal <= minLdrVal) maxLdrVal = minLdrVal + 1; // Ensure threshold is strictly above darkness limit
         
         int mappedLdr = ldrVal;
-        if (mappedLdr < 41) mappedLdr = 41; // Clamp values below 1% to 1% (darkness floor)
+        if (mappedLdr < minLdrVal) mappedLdr = minLdrVal; // Clamp values below darkness floor
         if (mappedLdr > maxLdrVal) mappedLdr = maxLdrVal; // Clamp to threshold to prevent extrapolation in map()
         
-        int pwm = map(mappedLdr, 41, maxLdrVal, cfg.minPwm, 255);
+        int pwm = map(mappedLdr, minLdrVal, maxLdrVal, cfg.minPwm, 255);
         pwm = constrain(pwm, 0, 255);
         
         // Write to PWM if PWM or config changed
-        if (pwm != lastPwmVal || cfg.minPwm != lastMinPwm || cfg.maxLdrPct != lastMaxLdrPct) {
+        if (pwm != lastPwmVal || cfg.minPwm != lastMinPwm || cfg.minLdrPct != lastMinLdrPct || cfg.maxLdrPct != lastMaxLdrPct) {
             lastPwmVal = pwm;
             lastMinPwm = cfg.minPwm;
+            lastMinLdrPct = cfg.minLdrPct;
             lastMaxLdrPct = cfg.maxLdrPct;
 #if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
             ledcWrite(TFT_BL, pwm);
 #else
             ledcWrite(0, pwm);
 #endif
-            Serial.printf("[Live Update] LDR Value: %d, PWM: %d, MinPWM: %d, MaxLDR: %d%%\n", 
-                          ldrVal, pwm, cfg.minPwm, cfg.maxLdrPct);
+            Serial.printf("[Live Update] LDR Value: %d, PWM: %d, MinPWM: %d, MinLDR: %d%%, MaxLDR: %d%%\n", 
+                          ldrVal, pwm, cfg.minPwm, cfg.minLdrPct, cfg.maxLdrPct);
         }
         
         // Draw LDR percentage at the bottom of the 4th screen (index 3)
@@ -407,8 +411,8 @@ void updateBacklight() {
         // Throttle general status logging
         static unsigned long lastLog = 0;
         if (millis() - lastLog > 2000) {
-            Serial.printf("LDR Value: %d (%d%%), PWM: %d, MinPWM: %d, MaxLDR: %d%%\n", 
-                          ldrVal, ldrPct, pwm, cfg.minPwm, cfg.maxLdrPct);
+            Serial.printf("LDR Value: %d (%d%%), PWM: %d, MinPWM: %d, MinLDR: %d%%, MaxLDR: %d%%\n", 
+                          ldrVal, ldrPct, pwm, cfg.minPwm, cfg.minLdrPct, cfg.maxLdrPct);
             lastLog = millis();
         }
     }

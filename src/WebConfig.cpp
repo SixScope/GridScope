@@ -35,7 +35,8 @@ WebConfig::WebConfig() : server(80), events("/events") {
     configMutex = xSemaphoreCreateMutex();
     for(int i=0; i<6; i++) currentConfig.screenData[i] = (DisplayDataType)i;
     currentConfig.minPwm = 10;
-    currentConfig.maxLdrPct = 25;
+    currentConfig.minLdrPct = 30;
+    currentConfig.maxLdrPct = 80;
 }
 
 void WebConfig::begin() {
@@ -60,6 +61,7 @@ void WebConfig::begin() {
                 if(request->hasParam(p, true)) currentConfig.screenData[i] = (DisplayDataType)request->getParam(p, true)->value().toInt();
             }
             if(request->hasParam("minPwm", true)) currentConfig.minPwm = request->getParam("minPwm", true)->value().toInt();
+            if(request->hasParam("minLdr", true)) currentConfig.minLdrPct = request->getParam("minLdr", true)->value().toInt();
             if(request->hasParam("maxLdr", true)) currentConfig.maxLdrPct = request->getParam("maxLdr", true)->value().toInt();
             xSemaphoreGive(configMutex);
         }
@@ -71,6 +73,9 @@ void WebConfig::begin() {
         if (xSemaphoreTake(configMutex, portMAX_DELAY) == pdTRUE) {
             if(request->hasParam("minPwm")) {
                 currentConfig.minPwm = request->getParam("minPwm")->value().toInt();
+            }
+            if(request->hasParam("minLdr")) {
+                currentConfig.minLdrPct = request->getParam("minLdr")->value().toInt();
             }
             if(request->hasParam("maxLdr")) {
                 currentConfig.maxLdrPct = request->getParam("maxLdr")->value().toInt();
@@ -118,6 +123,7 @@ Config WebConfig::getConfig() {
 }
 
 void WebConfig::loadConfig() {
+    bool needsSave = false;
     preferences.begin("gridcfg", true);
     if (xSemaphoreTake(configMutex, portMAX_DELAY) == pdTRUE) {
         for(int i=0; i<6; i++) {
@@ -125,10 +131,19 @@ void WebConfig::loadConfig() {
             currentConfig.screenData[i] = (DisplayDataType)preferences.getInt(k.c_str(), i);
         }
         currentConfig.minPwm = preferences.getUChar("minPwm", 10);
-        currentConfig.maxLdrPct = preferences.getUChar("maxLdr", 25);
+        currentConfig.minLdrPct = preferences.getUChar("minLdr", 30);
+        currentConfig.maxLdrPct = preferences.getUChar("maxLdr", 80);
+        if (currentConfig.maxLdrPct <= currentConfig.minLdrPct) {
+            currentConfig.minLdrPct = 30;
+            currentConfig.maxLdrPct = 80;
+            needsSave = true;
+        }
         xSemaphoreGive(configMutex);
     }
     preferences.end();
+    if (needsSave) {
+        saveConfig();
+    }
 }
 
 void WebConfig::saveConfig() {
@@ -139,6 +154,7 @@ void WebConfig::saveConfig() {
             preferences.putInt(k.c_str(), (int)currentConfig.screenData[i]);
         }
         preferences.putUChar("minPwm", currentConfig.minPwm);
+        preferences.putUChar("minLdr", currentConfig.minLdrPct);
         preferences.putUChar("maxLdr", currentConfig.maxLdrPct);
         xSemaphoreGive(configMutex);
     }
@@ -186,6 +202,14 @@ String WebConfig::buildHtml() {
     html += "    <span id='minPwmVal' style='color:#f39c12;font-weight:bold;'>" + String(cfg.minPwm) + "</span>";
     html += "  </div>";
     html += "  <input type='range' name='minPwm' min='0' max='255' value='" + String(cfg.minPwm) + "' class='slider' oninput='document.getElementById(\"minPwmVal\").innerText=this.value; updateBrightnessLive(\"minPwm\", this.value);'>";
+    html += "</div>";
+    
+    html += "<div style='margin-bottom:15px;'>";
+    html += "  <div style='display:flex;justify-content:space-between;margin-bottom:5px;'>";
+    html += "    <label>Darkness Threshold LDR (1-100%) <span style='font-size:11px;color:#aaa;'>(LDR percentage that triggers minimum brightness)</span></label>";
+    html += "    <span id='minLdrVal' style='color:#f39c12;font-weight:bold;'>" + String(cfg.minLdrPct) + "%</span>";
+    html += "  </div>";
+    html += "  <input type='range' name='minLdr' min='1' max='100' value='" + String(cfg.minLdrPct) + "' class='slider' oninput='document.getElementById(\"minLdrVal\").innerText=this.value+\"%\"; updateBrightnessLive(\"minLdr\", this.value);'>";
     html += "</div>";
     
     html += "<div style='margin-bottom:15px;'>";

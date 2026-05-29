@@ -321,16 +321,23 @@ void setup() {
     displayMgr.tft.drawString("Querying API...", 120, 120, 4);
     displayMgr.unselectAll();
 
-    // 8. Spawn FreeRTOS task on Core 0 for background network fetches
-    xTaskCreatePinnedToCore(
+    // 8. Spawn FreeRTOS task on Core 1 for background network fetches
+    Serial.printf("[Diagnostics] PSRAM Found: %s, Size: %u, Free: %u\n", 
+                  psramFound() ? "YES" : "NO", ESP.getPsramSize(), ESP.getFreePsram());
+    Serial.printf("[Diagnostics] Free Heap: %u, Max Block: %u\n", 
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+
+    BaseType_t res = xTaskCreatePinnedToCore(
         dataFetchTask,
         "dataFetchTask",
         8192,
         NULL,
         1,
         NULL,
-        0
+        1
     );
+    Serial.printf("[Diagnostics] Task Creation Result: %s\n", 
+                  (res == pdPASS) ? "SUCCESS" : "FAILED");
 }
 
 void updateBacklight() {
@@ -445,10 +452,7 @@ void loop() {
             }
             
             if (!timeSynced && (millis() - lastNtpTry > 30000 || lastNtpTry == 0)) {
-                logMsg("Attempting NTP sync...");
-                configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-                setenv("TZ", "GMT0BST,M3.5.0/1,M10.5.0", 1);
-                tzset();
+                logMsg("Waiting for NTP sync...");
                 lastNtpTry = millis();
             }
         }

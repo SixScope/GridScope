@@ -317,7 +317,8 @@ bool DataManager::fetchElexonGeneration(float* nextValues, float& localDemandAdj
     if(code == HTTP_CODE_OK) {
         String payload = http.getString();
         JsonDocument doc;
-        if (!deserializeJson(doc, payload)) {
+        DeserializationError error = deserializeJson(doc, payload);
+        if (!error) {
             JsonArray arr = doc.as<JsonArray>();
             for(JsonObject item : arr) {
                 const char* ft = item["fuelType"];
@@ -326,7 +327,7 @@ bool DataManager::fetchElexonGeneration(float* nextValues, float& localDemandAdj
                 if (ft) {
                     if (strcmp(ft, "SOLAR") == 0) localDemandAdjust += val;
                     if (val < 0) localDemandAdjust += fabs(val);
-
+ 
                     for(int i=0; i<numConfigs; i++) {
                         for(int j=0; j<configs[i].numFuelTypes; j++) {
                             if (configs[i].fuelTypes[j] == ft) {
@@ -339,7 +340,11 @@ bool DataManager::fetchElexonGeneration(float* nextValues, float& localDemandAdj
             }
             http.end();
             return true;
+        } else {
+            logMsg("Elexon Gen JSON parse failed: %s", error.c_str());
         }
+    } else {
+        logMsg("Elexon Gen API returned HTTP code %d", code);
     }
     http.end(); return false;
 }

@@ -40,10 +40,6 @@ void DisplayManager::begin() {
         delay(50);
     }
 
-    sprite = new TFT_eSprite(&tft);
-    sprite->setColorDepth(8);
-    sprite->createSprite(240, 240);
-
     // Initialize TJpg_Decoder
     TJpgDec.setCallback(tft_output);
     TJpgDec.setJpgScale(1);
@@ -134,6 +130,13 @@ static void drawArcSlice(TFT_eSprite* sprite, int px, int py, int radius, int ar
 }
 
 void DisplayManager::drawGauge(uint8_t index, const char* title, float value, float min_val, float max_val, const char* unit, uint16_t theme_color, float percentage, int numRanges, DisplayRange* ranges, bool failed) {
+    TFT_eSprite localSprite(&tft);
+    localSprite.setColorDepth(16);
+    if (!localSprite.createSprite(240, 240)) {
+        Serial.printf("Failed to create 16-bit gauge sprite! Free heap: %u, Max block: %u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+        return;
+    }
+    TFT_eSprite* sprite = &localSprite;
     sprite->fillSprite(TFT_BLACK);
 
     const int   px       = 120;
@@ -246,4 +249,5 @@ void DisplayManager::drawGauge(uint8_t index, const char* title, float value, fl
     selectDisplay(index);
     sprite->pushSprite(0, 0);
     unselectAll();
+    localSprite.deleteSprite();
 }

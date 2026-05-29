@@ -379,15 +379,16 @@ void updateBacklight() {
         
         Config cfg = webConfig.getConfig();
         
-        // Map LDR starting from 0% up to daylight threshold (cfg.maxLdrPct)
+        // Map LDR starting from a fixed 20% hardware darkness offset up to daylight threshold (cfg.maxLdrPct)
+        int minLdrVal = (20 * 4095) / 100;
         int maxLdrVal = (cfg.maxLdrPct * 4095) / 100;
-        if (maxLdrVal < 1) maxLdrVal = 1; // Ensure threshold is at least 1
+        if (maxLdrVal <= minLdrVal) maxLdrVal = minLdrVal + 1; // Ensure max is strictly greater than min
         
         int mappedLdr = ldrVal;
-        if (mappedLdr < 0) mappedLdr = 0; // Clamp values below 0
+        if (mappedLdr < minLdrVal) mappedLdr = minLdrVal; // Clamp below baseline
         if (mappedLdr > maxLdrVal) mappedLdr = maxLdrVal; // Clamp to threshold to prevent extrapolation in map()
         
-        int pwm = map(mappedLdr, 0, maxLdrVal, cfg.minPwm, 255);
+        int pwm = map(mappedLdr, minLdrVal, maxLdrVal, cfg.minPwm, 255);
         pwm = constrain(pwm, 0, 255);
         
         // Slew the physical PWM slowly towards the target PWM to prevent feedback oscillations

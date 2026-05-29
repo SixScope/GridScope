@@ -19,7 +19,6 @@ struct Config {
     DisplayDataType screenData[6];
     uint8_t theme; 
     uint8_t minPwm;
-    uint8_t minLdrPct;
     uint8_t maxLdrPct;
 };
 
